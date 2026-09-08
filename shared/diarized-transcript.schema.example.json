@@ -1,0 +1,30 @@
+{
+  "language": "en",
+  "duration_sec": 174.48,
+  "speakers": ["A", "B"],
+  "utterances": [],
+  "words": [],
+  "sentiment_segments": [],
+  "speaker_metrics": [],
+  "call_quality": {
+    "overall_score": 78.5,
+    "recording_quality_score": 82.0,
+    "fluency_score": 76.0,
+    "energy_score": 71.0,
+    "avg_response_time_sec": 1.2,
+    "max_response_time_sec": 4.5,
+    "silence_ratio_pct": 18.0,
+    "overlap_or_interrupt_proxy": 8.0,
+    "customer_disconnected": false,
+    "disconnect_reason": null,
+    "disconnect_confidence": 0.0
+  },
+  "ai_extraction": {
+    "summary": "Example",
+    "key_topics": [],
+    "action_items": [],
+    "agent_coaching_notes": [],
+    "available": true
+  },
+  "provider": "assemblyai"
+}

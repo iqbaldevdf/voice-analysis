@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+from app.providers.assemblyai import AssemblyAIProvider
+from app.schemas import CallAnalysisResult
+
+load_dotenv()
+
+app = FastAPI(title="Voice Analysis AI Service", version="2.0.0")
+
+
+class AnalyzeRequest(BaseModel):
+    audio_path: str = Field(..., description="Absolute path to normalized WAV")
+    language: str | None = None
+    participant_context: dict | None = None
+
+
+@lru_cache(maxsize=1)
+def get_provider() -> AssemblyAIProvider:
+    return AssemblyAIProvider()
+
+
+@app.get("/health")
+def health() -> dict:
+    key = (os.getenv("ASSEMBLYAI_API_KEY") or "").strip()
+    key_configured = bool(key) and key not in {"YOUR_ASSEMBLYAI_API_KEY", "changeme"}
+    return {
+        "ok": True,
+        "provider": "assemblyai",
+        "api_key_configured": key_configured,
+        "speech_model": os.getenv("ASSEMBLYAI_SPEECH_MODEL", "universal-2"),
+        "llm_enabled": os.getenv("ASSEMBLYAI_ENABLE_LLM", "true").lower() in {"1", "true", "yes"},
+        "llm_model": os.getenv("ASSEMBLYAI_LLM_MODEL", "qwen3.5-4b-32k-fast"),
+        "llm_gateway": os.getenv(
+            "ASSEMBLYAI_LLM_GATEWAY_URL",
+            "https://llm-gateway.assemblyai.com/v1/chat/completions",
+        ),
+    }
+
+
+@app.post("/analyze", response_model=CallAnalysisResult)
+def analyze(request: AnalyzeRequest) -> CallAnalysisResult:
+    audio_path = Path(request.audio_path)
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail=f"Audio not found: {request.audio_path}")
+    if not audio_path.is_file():
+        raise HTTPException(status_code=400, detail="audio_path must be a file")
+
+    try:
+        provider = get_provider()
+        return provider.analyze(
+            str(audio_path.resolve()),
+            language=request.language,
+            participant_context=request.participant_context,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8001"))
+    uvicorn.run("app.main:app", host=host, port=port, reload=False)
