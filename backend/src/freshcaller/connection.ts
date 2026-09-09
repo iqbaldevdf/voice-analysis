@@ -22,6 +22,8 @@ export function classifyFreshcallerCall(
   const lifecycle = (call.life_cycle ?? []).map((event) => event.type.toLowerCase());
   const hasSignal = statuses.length > 0 || lifecycle.length > 0;
 
+  const duration = durationSec ?? call.bill_duration ?? null;
+  const short = isLikelyVoicemail(duration);
   const voicemail =
     lifecycle.some((type) => type.includes("voicemail")) ||
     statuses.some((status) => VOICEMAIL_STATUSES.has(status));
@@ -29,12 +31,11 @@ export function classifyFreshcallerCall(
   const connectedStatus = statuses.some((status) => CONNECTED_STATUSES.has(status));
 
   if (!hasSignal) {
-    const short = isLikelyVoicemail(durationSec ?? call.bill_duration ?? null);
     return { isConnected: !short, isVoicemail: short, callStatus: null };
   }
 
   return {
-    isConnected: !voicemail && (answered || connectedStatus),
+    isConnected: !voicemail && !short && (answered || connectedStatus),
     isVoicemail: voicemail,
     callStatus: statuses.find((status) => status === 1) ?? statuses[0] ?? null,
   };

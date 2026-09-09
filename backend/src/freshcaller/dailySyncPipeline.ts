@@ -28,9 +28,22 @@ const FC_RECORDINGS_DIR = path.resolve(
 );
 
 let running = false;
+let runningCallDate: string | null = null;
 
 export function isDailySyncRunning(): boolean {
   return running;
+}
+
+export function activeSyncCallDate(): string | null {
+  return runningCallDate;
+}
+
+function syncAlreadyRunningError(): Error {
+  const date = runningCallDate;
+  const message = date
+    ? `A sync is already running for ${date}. Wait for that day to finish before starting another sync.`
+    : "A sync is already running. Wait for it to finish before starting another.";
+  return Object.assign(new Error(message), { status: 409 });
 }
 
 function sleep(ms: number) {
@@ -82,7 +95,7 @@ export async function enqueueDailySync(
   options: DailySyncOptions = {},
 ): Promise<DailySyncResult> {
   if (running) {
-    throw Object.assign(new Error("A daily sync is already running"), { status: 409 });
+    throw syncAlreadyRunningError();
   }
 
   const callDate = options.callDate || previousIstCallDate();
@@ -147,7 +160,7 @@ export async function runDailySync(
   options: DailySyncOptions & { runId?: string } = {},
 ): Promise<DailySyncResult> {
   if (running && !options.runId) {
-    throw Object.assign(new Error("A daily sync is already running"), { status: 409 });
+    throw syncAlreadyRunningError();
   }
 
   const callDate = options.callDate || previousIstCallDate();
@@ -170,6 +183,7 @@ export async function runDailySync(
   }
 
   running = true;
+  runningCallDate = callDate;
   const runId = options.runId || createRunId();
   let ctx: CronRunContext = { runId, callDate, trigger };
   const now = new Date();
@@ -524,5 +538,6 @@ export async function runDailySync(
     throw Object.assign(error instanceof Error ? error : new Error(message), { runId, callDate });
   } finally {
     running = false;
+    runningCallDate = null;
   }
 }

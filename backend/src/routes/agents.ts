@@ -1,30 +1,137 @@
 import { Router } from "express";
 import { agentsCollection, backfillAgentsFromRecordings } from "../db/agents.js";
-import { recordingsCollection } from "../db/mongo.js";
-import { excludeVoicemailFilter, VOICEMAIL_MAX_DURATION_SEC } from "../voicemail.js";
+import { recordingsCollection, type RecordingDocument } from "../db/mongo.js";
+import {
+  agentPerformance,
+  callQualityFromResult,
+  inQuarter,
+  introductionScriptFromResult,
+  mean,
+  parseQuarter,
+  recentQuarters,
+  recordingCallDate,
+} from "../scoring/agentQuarter.js";
+import { fillMissingPerformanceScores } from "../scoring/fillPerformanceScore.js";
+import {
+  isAnsweredCall,
+  isConnectedConversation,
+  isForwardedMailCall,
+  VOICEMAIL_MAX_DURATION_SEC,
+} from "../voicemail.js";
 
 const SORTABLE = new Set(["createdTime", "durationSec", "analysisStatus", "callId"]);
 
-function speechRateFromResult(result: unknown): number | null {
-  const metrics = (
-    result as {
-      speaker_metrics?: Array<{
-        role_guess?: string | null;
-        words_spoken?: number;
-        talk_time_sec?: number;
-        words_per_minute?: number;
-      }>;
-    } | null
-  )?.speaker_metrics;
-  const agent = metrics?.find((item) => item.role_guess === "agent");
-  if (!agent) return null;
-  if (typeof agent.talk_time_sec === "number" && agent.talk_time_sec > 0 && typeof agent.words_spoken === "number") {
-    return Math.round((agent.words_spoken / agent.talk_time_sec) * 10) / 10;
+type AgentRecordingDoc = Pick<
+  RecordingDocument,
+  | "callId"
+  | "recordingId"
+  | "createdTime"
+  | "callDate"
+  | "durationSec"
+  | "direction"
+  | "phoneNumber"
+  | "callNotes"
+  | "analysisStatus"
+  | "participants"
+  | "analysisResult"
+  | "isConnected"
+  | "isVoicemail"
+  | "disposition"
+>;
+
+function scoreNoteFor(agentPerf: { overallScore?: number | null; note?: string | null } | undefined): string | null {
+  if (!agentPerf || typeof agentPerf.overallScore === "number") return null;
+  const note = agentPerf.note ?? "";
+  if (/429|too many requests/i.test(note)) {
+    return "Performance score was not returned. The scoring model was rate-limited.";
   }
-  if (typeof agent.words_per_minute === "number") {
-    return Math.round((agent.words_per_minute / 60) * 10) / 10;
-  }
+  if (note) return "Performance score was not returned for this call.";
   return null;
+}
+
+function toAgentRow(doc: AgentRecordingDoc) {
+  const customer = doc.participants?.find((p) => p.role.toLowerCase() === "customer");
+  const agentPerf = agentPerformance(doc.analysisResult);
+  const quality = callQualityFromResult(doc.analysisStatus === "completed" ? doc.analysisResult : null);
+  const intro = introductionScriptFromResult(doc.analysisStatus === "completed" ? doc.analysisResult : null);
+  const categoryScores = agentPerf?.scores
+    ? Object.fromEntries(Object.entries(agentPerf.scores).map(([key, value]) => [key, value?.score ?? null]))
+    : null;
+  return {
+    callId: doc.callId,
+    recordingId: doc.recordingId,
+    createdTime: doc.createdTime ?? null,
+    callDate: doc.callDate ?? null,
+    durationSec: doc.durationSec ?? null,
+    direction: doc.direction ?? null,
+    phoneNumber: doc.phoneNumber ?? null,
+    customerName: customer?.name ?? null,
+    customerPhone: customer?.phone ?? null,
+    analysisStatus: doc.analysisStatus,
+    disposition: doc.disposition ?? null,
+    answered: isAnsweredCall(doc),
+    overallScore: agentPerf?.overallScore ?? null,
+    callQualityScore: quality.callQualityScore,
+    clarityScore: quality.clarityScore,
+    speechRateScore: quality.speechRateScore,
+    wordsPerSecond: quality.wordsPerSecond,
+    talkPercentage: agentPerf?.talkPercentage ?? null,
+    talkDurationSec: agentPerf?.totalTalkDuration ?? null,
+    interruptionCount: agentPerf?.interruptionCount ?? null,
+    questionCount: agentPerf?.questionCount ?? null,
+    highlight: agentPerf?.strengths?.[0] ?? agentPerf?.improvements?.[0] ?? null,
+    scoreNote: scoreNoteFor(agentPerf),
+    introductionScore: intro?.score ?? null,
+    introductionRank: intro?.rank ?? null,
+    categoryScores,
+  };
+}
+
+function matchesTableFilters(
+  doc: AgentRecordingDoc,
+  filters: {
+    q: string;
+    status: string;
+    dateFrom: string;
+    dateTo: string;
+    minDuration?: number;
+    maxDuration?: number;
+  },
+): boolean {
+  if (filters.status && filters.status !== "all" && doc.analysisStatus !== filters.status) return false;
+  const callDate = recordingCallDate(doc);
+  if (filters.dateFrom && (!callDate || callDate < filters.dateFrom)) return false;
+  if (filters.dateTo && (!callDate || callDate > filters.dateTo)) return false;
+  if (filters.minDuration != null && Number.isFinite(filters.minDuration) && (doc.durationSec ?? 0) < filters.minDuration) {
+    return false;
+  }
+  if (filters.maxDuration != null && Number.isFinite(filters.maxDuration) && (doc.durationSec ?? 0) > filters.maxDuration) {
+    return false;
+  }
+  if (filters.q) {
+    const needle = filters.q.toLowerCase();
+    const haystack = [
+      doc.phoneNumber,
+      doc.callNotes,
+      ...(doc.participants ?? []).flatMap((p) => [p.name, p.phone]),
+      String(doc.callId),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    if (!haystack.includes(needle)) return false;
+  }
+  return true;
+}
+
+function compareRecordings(a: AgentRecordingDoc, b: AgentRecordingDoc, sortBy: string, sortDir: 1 | -1): number {
+  const left = a[sortBy as keyof AgentRecordingDoc];
+  const right = b[sortBy as keyof AgentRecordingDoc];
+  if (left == null && right == null) return 0;
+  if (left == null) return 1;
+  if (right == null) return -1;
+  if (typeof left === "number" && typeof right === "number") return (left - right) * sortDir;
+  return String(left).localeCompare(String(right)) * sortDir;
 }
 
 function serializeAgent(doc: {
@@ -117,114 +224,52 @@ export function createAgentsRouter(): Router {
           ? Number(req.query.maxDuration)
           : undefined;
       const excludeVoicemail = String(req.query.excludeVoicemail ?? "true") !== "false";
+      const appointmentOnly = String(req.query.appointmentOnly ?? "false") === "true";
+      const quarter = parseQuarter(typeof req.query.quarter === "string" ? req.query.quarter : undefined);
       const sortByRaw = typeof req.query.sortBy === "string" ? req.query.sortBy : "createdTime";
       const sortBy = SORTABLE.has(sortByRaw) ? sortByRaw : "createdTime";
       const sortDir = String(req.query.sortDir ?? "desc").toLowerCase() === "asc" ? 1 : -1;
       const page = Math.max(1, Number(req.query.page ?? 1) || 1);
       const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 10) || 10));
 
-      const filter: Record<string, unknown> = { agentId };
-      const and: Record<string, unknown>[] = [];
-      if (excludeVoicemail) {
-        and.push({ isVoicemail: { $ne: true } });
-        and.push(excludeVoicemailFilter());
-      }
-      if (status && status !== "all") filter.analysisStatus = status;
-      if (dateFrom) and.push({ createdTime: { $gte: dateFrom } });
-      if (dateTo) {
-        const end = /^\d{4}-\d{2}-\d{2}$/.test(dateTo) ? `${dateTo}T23:59:59.999Z` : dateTo;
-        and.push({ createdTime: { $lte: end } });
-      }
-      if (minDuration != null && Number.isFinite(minDuration)) and.push({ durationSec: { $gte: minDuration } });
-      if (maxDuration != null && Number.isFinite(maxDuration)) and.push({ durationSec: { $lte: maxDuration } });
-      if (q) {
-        const regex = { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
-        and.push({
-          $or: [
-            { phoneNumber: regex },
-            { callNotes: regex },
-            { "participants.name": regex },
-            { "participants.phone": regex },
-            ...(Number.isFinite(Number(q)) ? [{ callId: Number(q) }] : []),
-          ],
-        });
-      }
-      if (and.length > 0) filter.$and = and;
+      const docs = (await recordingsCollection()
+        .find({ agentId })
+        .project({
+          callId: 1,
+          recordingId: 1,
+          createdTime: 1,
+          callDate: 1,
+          durationSec: 1,
+          direction: 1,
+          phoneNumber: 1,
+          callNotes: 1,
+          analysisStatus: 1,
+          agentName: 1,
+          participants: 1,
+          analysisResult: 1,
+          isConnected: 1,
+          isVoicemail: 1,
+          disposition: 1,
+        })
+        .toArray()) as AgentRecordingDoc[];
 
-      const [total, recordings] = await Promise.all([
-        recordingsCollection().countDocuments(filter),
-        recordingsCollection()
-          .find(filter)
-          .project({
-            callId: 1,
-            recordingId: 1,
-            createdTime: 1,
-            callDate: 1,
-            durationSec: 1,
-            direction: 1,
-            phoneNumber: 1,
-            analysisStatus: 1,
-            agentName: 1,
-            participants: 1,
-            analysisResult: 1,
-            isConnected: 1,
-            isVoicemail: 1,
-          })
-          .sort({ [sortBy]: sortDir })
-          .skip((page - 1) * limit)
-          .limit(limit)
-          .toArray(),
-      ]);
+      await fillMissingPerformanceScores(docs);
 
-      const rows = recordings.map((rec) => {
-        const customer = rec.participants?.find((p) => p.role.toLowerCase() === "customer");
-        const performance = (
-          rec.analysisResult as {
-            participant_performance?: Array<{
-              participantRole?: string;
-              overallScore?: number | null;
-              talkPercentage?: number;
-              totalTalkDuration?: number;
-              interruptionCount?: number;
-              questionCount?: number;
-              strengths?: string[];
-              improvements?: string[];
-              scores?: Record<string, { score?: number }>;
-            }>;
-          } | undefined
-        )?.participant_performance;
-        const agentPerf = performance?.find((item) => item.participantRole === "agent");
-        const categoryScores = agentPerf?.scores
-          ? Object.fromEntries(
-              Object.entries(agentPerf.scores).map(([key, value]) => [key, value?.score ?? null]),
-            )
-          : null;
-        return {
-          callId: rec.callId,
-          recordingId: rec.recordingId,
-          createdTime: rec.createdTime ?? null,
-          callDate: rec.callDate ?? null,
-          durationSec: rec.durationSec ?? null,
-          direction: rec.direction ?? null,
-          phoneNumber: rec.phoneNumber ?? null,
-          customerName: customer?.name ?? null,
-          customerPhone: customer?.phone ?? null,
-          analysisStatus: rec.analysisStatus,
-          overallScore: agentPerf?.overallScore ?? null,
-          wordsPerSecond: speechRateFromResult(rec.analysisResult),
-          talkPercentage: agentPerf?.talkPercentage ?? null,
-          talkDurationSec: agentPerf?.totalTalkDuration ?? null,
-          interruptionCount: agentPerf?.interruptionCount ?? null,
-          questionCount: agentPerf?.questionCount ?? null,
-          highlight: agentPerf?.strengths?.[0] ?? agentPerf?.improvements?.[0] ?? null,
-          categoryScores,
-        };
-      });
+      const quarterDocs = docs.filter(
+        (doc) => inQuarter(recordingCallDate(doc), quarter) && !isForwardedMailCall(doc),
+      );
+      const connected = quarterDocs.filter((doc) => isConnectedConversation(doc));
+      const scoreDocs = appointmentOnly
+        ? connected.filter((doc) => doc.disposition === "appointment")
+        : connected;
+      const rows = scoreDocs.map(toAgentRow);
 
-      const analyzed = rows.filter((row) => typeof row.overallScore === "number");
-      const rated = rows.filter((row) => typeof row.wordsPerSecond === "number");
+      const completed = rows.filter((row) => row.analysisStatus === "completed");
+      const scored = completed.filter((row) => typeof row.overallScore === "number");
+      const qualityRows = completed.filter((row) => typeof row.callQualityScore === "number");
+      const introRows = completed.filter((row) => typeof row.introductionScore === "number");
       const categoryTotals: Record<string, { sum: number; count: number }> = {};
-      for (const row of analyzed) {
+      for (const row of scored) {
         for (const [key, score] of Object.entries(row.categoryScores ?? {})) {
           if (typeof score !== "number") continue;
           categoryTotals[key] ??= { sum: 0, count: 0 };
@@ -233,18 +278,40 @@ export function createAgentsRouter(): Router {
         }
       }
 
+      const tableSource = excludeVoicemail
+        ? scoreDocs
+        : appointmentOnly
+          ? quarterDocs.filter((doc) => doc.disposition === "appointment")
+          : quarterDocs;
+      const filtered = tableSource.filter((doc) =>
+        matchesTableFilters(doc, { q, status, dateFrom, dateTo, minDuration, maxDuration }),
+      );
+      filtered.sort((a, b) => compareRecordings(a, b, sortBy, sortDir));
+      const total = filtered.length;
+      const pageRows = filtered.slice((page - 1) * limit, page * limit).map(toAgentRow);
+
       res.json({
         agent: serializeAgent(agent),
+        quarter,
+        availableQuarters: recentQuarters(),
+        appointmentOnly,
         summary: {
+          connects: scoreDocs.length,
+          analyzedConnects: scoreDocs.filter((doc) => doc.analysisStatus === "completed").length,
+          scoredConnects: scored.length,
+          qualityScoredConnects: qualityRows.length,
+          averagePerformance: mean(scored.map((row) => row.overallScore)),
+          averageCallQuality: mean(qualityRows.map((row) => row.callQualityScore)),
+          averageClarity: mean(qualityRows.map((row) => row.clarityScore)),
+          averageSpeechRateScore: mean(qualityRows.map((row) => row.speechRateScore)),
+          averageWordsPerSecond: mean(completed.map((row) => row.wordsPerSecond)),
+          averageIntroductionScore: mean(introRows.map((row) => row.introductionScore)),
+          introductionScoredConnects: introRows.length,
           inbound: rows.filter((row) => row.direction === "incoming" || row.direction === "inbound").length,
           outbound: rows.filter((row) => row.direction === "outgoing" || row.direction === "outbound").length,
-          pendingAnalysis: rows.filter((row) => row.analysisStatus !== "completed").length,
-          totalDurationSec: rows.reduce((sum, row) => sum + (row.durationSec ?? 0), 0),
-          talkDurationSec: rows.reduce((sum, row) => sum + (row.talkDurationSec ?? 0), 0),
-          averageWordsPerSecond:
-            rated.length > 0
-              ? Math.round((rated.reduce((sum, row) => sum + (row.wordsPerSecond ?? 0), 0) / rated.length) * 10) / 10
-              : null,
+          pendingAnalysis: scoreDocs.filter((doc) => doc.analysisStatus !== "completed").length,
+          totalDurationSec: scoreDocs.reduce((sum, doc) => sum + (doc.durationSec ?? 0), 0),
+          talkDurationSec: scored.reduce((sum, row) => sum + (row.talkDurationSec ?? 0), 0),
           categoryAverages: Object.fromEntries(
             Object.entries(categoryTotals).map(([key, value]) => [
               key,
@@ -252,7 +319,7 @@ export function createAgentsRouter(): Router {
             ]),
           ),
         },
-        recordings: rows,
+        recordings: pageRows,
         total,
         page,
         limit,

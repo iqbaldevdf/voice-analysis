@@ -1,18 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchAgents, type AgentSummary } from "../api";
+import { agentDisplayName, agentInitials } from "../lib/agentInitials";
 import { SearchField } from "../components/ui/Fields";
 
 type Props = {
   onError: (message: string | null) => void;
 };
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-}
 
 function coverage(agent: AgentSummary): number {
   if (!agent.recordingCount) return 0;
@@ -131,9 +125,9 @@ export function AgentsListView({ onError }: Props) {
                 onClick={() => navigate(`/agents/${encodeURIComponent(agent.agentId)}`)}
               >
                 <div className="agent-card-top">
-                  <span className="avatar agent">{initials(agent.name)}</span>
+                  <span className="avatar agent">{agentInitials(agent.name)}</span>
                   <div className="agent-identity">
-                    <strong>{agent.name}</strong>
+                    <strong>{agentDisplayName(agent.name)}</strong>
                     <span>{agent.teamName || "No team assigned"}</span>
                   </div>
                   <span className={`badge ${scoreTone(agent.averageScore)}`}>

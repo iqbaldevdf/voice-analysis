@@ -767,6 +767,7 @@ input[type="text"] {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+  align-items: flex-end;
 }
 
 .viewport-tabs {
@@ -1488,6 +1489,113 @@ input[type="text"] {
   background: var(--teal-soft);
   color: var(--good);
   font-size: 0.85rem;
+}
+
+.disposition-field {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.disposition {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.disposition-unset {
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.disposition-hung_up,
+.disposition-not_interested {
+  background: #f8efd4;
+  color: #8a5a00;
+}
+
+.disposition-appointment {
+  background: #1f6b45;
+  color: #f4faf6;
+}
+
+.disposition-follow_up {
+  background: #d7efe3;
+  color: #1f6b45;
+}
+
+.disposition-dnc {
+  background: #e4eef8;
+  color: #245789;
+}
+
+.intro-script-panel .intro-script-summary {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.intro-script-panel .intro-script-summary strong {
+  font-size: 1.6rem;
+}
+
+.intro-theme-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.intro-theme {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.intro-theme.hit {
+  background: #eef8f2;
+}
+
+.intro-theme.miss {
+  background: #fafafa;
+}
+
+.intro-theme-mark {
+  font-weight: 700;
+  color: var(--good);
+}
+
+.intro-theme.miss .intro-theme-mark {
+  color: var(--muted);
+}
+
+.intro-theme p {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.intro-missed {
+  margin-top: 12px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.intro-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .intent {
@@ -2288,6 +2396,10 @@ input[type="text"] {
 
 .agent-kpi {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.agent-quarter {
+  min-width: 148px;
 }
 
 .agent-roster {

@@ -19,6 +19,9 @@ export function jobFromDbRecording(rec: DbRecordingDetail): AnalysisJob {
     durationSec: rec.durationSec ?? undefined,
     result,
     freshcallerCallId: rec.callId,
+    recordingId: rec.recordingId,
+    disposition: rec.disposition ?? null,
+    answered: rec.answered,
     callMeta: {
       callId: rec.callId,
       direction: rec.direction,

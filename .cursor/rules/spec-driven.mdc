@@ -1,0 +1,31 @@
+---
+description: Spec-driven development — read specs before changing VoiceIQ behaviour
+alwaysApply: true
+---
+
+# Spec-driven development (VoiceIQ)
+
+This project uses **specs as source of truth** in `docs/specs/`.
+
+## Before implementing or changing behaviour
+
+1. Read `docs/specs/README.md` and the relevant `docs/specs/features/F*.md`.
+2. Scoring formulas: `docs/Call-and-Agent-Performance.md`.
+3. Agent instructions: root `AGENTS.md`.
+
+## When you change code that affects product behaviour
+
+- Update the matching feature spec in the same change set.
+- Check off or add acceptance criteria in that spec.
+- Update spec **Status** (Draft → Implemented / Partial).
+
+## Do not guess
+
+- Connect/voicemail rules → F06, `backend/src/voicemail.ts`
+- Disposition vs call outcome → F04 (separate fields)
+- Quarter KPIs → F03 + scoring doc
+- API contracts → `docs/specs/04-api-contract.md`
+
+## New features
+
+Copy `docs/specs/_template-feature.md`, assign next F-number, link from `docs/specs/README.md`.

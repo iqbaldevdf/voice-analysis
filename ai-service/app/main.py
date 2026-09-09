@@ -8,8 +8,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from app.participant_performance import run_participant_performance
 from app.providers.assemblyai import AssemblyAIProvider
-from app.schemas import CallAnalysisResult
+from app.schemas import CallAnalysisResult, DiarizedUtterance, ParticipantPerformanceAnalysis
 
 load_dotenv()
 
@@ -20,6 +21,14 @@ class AnalyzeRequest(BaseModel):
     audio_path: str = Field(..., description="Absolute path to normalized WAV")
     language: str | None = None
     participant_context: dict | None = None
+
+
+class ScorePerformanceRequest(BaseModel):
+    utterances: list[DiarizedUtterance]
+    role_hints: dict[str, str] = Field(default_factory=dict)
+    participants: list[dict] = Field(default_factory=list)
+    direction: str | None = None
+    call_notes: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -43,6 +52,25 @@ def health() -> dict:
             "https://llm-gateway.assemblyai.com/v1/chat/completions",
         ),
     }
+
+
+@app.post("/score-performance", response_model=list[ParticipantPerformanceAnalysis])
+def score_performance(request: ScorePerformanceRequest) -> list[ParticipantPerformanceAnalysis]:
+    provider = get_provider()
+    try:
+        return run_participant_performance(
+            utterances=request.utterances,
+            role_hints=request.role_hints,
+            named_roles=request.participants,
+            direction=request.direction,
+            call_notes=request.call_notes,
+            chat=provider.llm_gateway_chat if provider.enable_llm else None,
+            llm_enabled=provider.enable_llm,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/analyze", response_model=CallAnalysisResult)

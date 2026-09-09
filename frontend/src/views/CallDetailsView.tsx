@@ -21,11 +21,17 @@ import {
   jobAudioUrl,
   normalizeTopics,
   scoreTone,
+  updateRecordingDisposition,
   type AnalysisJob,
+  type SalesDisposition,
   type SpeakerMetrics,
 } from "../api";
+import { IntroductionScriptPanel } from "../components/IntroductionScriptPanel";
 import { ParticipantPerformancePanel } from "../components/ParticipantPerformancePanel";
 import { SearchField, SelectField } from "../components/ui/Fields";
+import { callQualityParts } from "../lib/callQuality";
+import { agentDisplayName } from "../lib/agentInitials";
+import { DISPOSITION_OPTIONS, dispositionClass, dispositionLabel } from "../lib/disposition";
 
 const AGENT_COLOR = "#2f6f5e";
 const CUSTOMER_COLOR = "#5c4d7a";
@@ -176,8 +182,14 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
   const [playbackRate, setPlaybackRate] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [mediaDuration, setMediaDuration] = useState(0);
+  const [disposition, setDisposition] = useState<SalesDisposition | "">(job.disposition ?? "");
+  const [savingDisposition, setSavingDisposition] = useState(false);
   const audioSrc = audioUrlOverride ?? jobAudioUrl(job.id);
   const isDbJob = job.id.startsWith("db-");
+
+  useEffect(() => {
+    setDisposition(job.disposition ?? "");
+  }, [job.id, job.disposition]);
 
   useEffect(() => {
     if (isDbJob || job.status === "completed" || job.status === "failed") return;
@@ -209,7 +221,7 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
 
   const agentParticipant = meta?.participants.find((p) => p.role.toLowerCase() === "agent");
   const customerParticipant = meta?.participants.find((p) => p.role.toLowerCase() === "customer");
-  const agentName = agentParticipant?.name || meta?.agentName || "Agent";
+  const agentName = agentDisplayName(agentParticipant?.name || meta?.agentName);
   const customerName = customerParticipant?.name || "Customer";
 
   const analysisDuration = result?.duration_sec ?? job.durationSec ?? 0;
@@ -316,12 +328,9 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
 
   const interruptions = cq.interruptions_count ?? 0;
   const silenceSec = cq.silence_sec ?? (duration * cq.silence_ratio_pct) / 100;
-  const speechWordsPerSec =
-    agentMetrics && agentMetrics.talk_time_sec > 0
-      ? agentMetrics.words_spoken / agentMetrics.talk_time_sec
-      : agentMetrics
-        ? agentMetrics.words_per_minute / 60
-        : null;
+  const quality = callQualityParts(cq, agentMetrics);
+  const speechWordsPerSec = quality.wordsPerSecond;
+  const canSetDisposition = job.freshcallerCallId != null && job.recordingId != null;
   const talkYou = agentMetrics?.talk_ratio_pct ?? 0;
   const talkCustomer = customerMetrics?.talk_ratio_pct ?? Math.max(0, 100 - talkYou);
   const overallScore =
@@ -383,6 +392,10 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
             <dd>{formatDurationLong(duration)}</dd>
           </div>
           <div>
+            <dt>Answered</dt>
+            <dd>{job.answered == null ? "—" : job.answered ? "Answered" : "Not answered"}</dd>
+          </div>
+          <div>
             <dt>Type</dt>
             <dd className="capitalize">{meta?.direction || "Call"}</dd>
           </div>
@@ -409,8 +422,18 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
       <section className="kpi-row">
         <article className="kpi-card kpi-quality">
           <span>Call Quality Score</span>
-          <QualityRing score={cq.overall_score} />
-          <em className={scoreTone(cq.overall_score)}>{qualityLabel(cq.overall_score)}</em>
+          {quality.callQualityScore != null ? (
+            <QualityRing score={quality.callQualityScore} />
+          ) : (
+            <strong>—</strong>
+          )}
+          <em className={quality.callQualityScore != null ? scoreTone(quality.callQualityScore) : "muted"}>
+            {quality.callQualityScore != null ? qualityLabel(quality.callQualityScore) : "Not scored"}
+          </em>
+          <em>
+            clarity {quality.clarityScore != null ? quality.clarityScore.toFixed(0) : "—"} · speech rate{" "}
+            {quality.speechRateScore != null ? quality.speechRateScore.toFixed(0) : "—"}
+          </em>
         </article>
         <article className="kpi-card">
           <span>Talk / Listen Ratio</span>
@@ -445,7 +468,10 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
         <article className="kpi-card">
           <span>Speech rate</span>
           <strong>{speechWordsPerSec != null ? speechWordsPerSec.toFixed(1) : "—"}</strong>
-          <em>words / second</em>
+          <em>
+            words / second
+            {quality.speechRateScore != null ? ` · score ${quality.speechRateScore.toFixed(0)}` : ""}
+          </em>
         </article>
       </section>
 
@@ -510,6 +536,41 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
             <strong className={`outcome-badge outcome-${(extraction?.call_outcome || "unclear").toLowerCase()}`}>
               {extraction?.call_outcome || "Unclear"}
             </strong>
+            {canSetDisposition ? (
+              <div className="disposition-field">
+                <SelectField
+                  id="sales-disposition"
+                  label="Disposition"
+                  value={disposition}
+                  disabled={savingDisposition}
+                  onChange={(e) => {
+                    const next = e.target.value as SalesDisposition | "";
+                    const callId = job.freshcallerCallId;
+                    const recordingId = job.recordingId;
+                    if (callId == null || recordingId == null) return;
+                    setDisposition(next);
+                    setSavingDisposition(true);
+                    void updateRecordingDisposition(callId, recordingId, next || null)
+                      .then(() => {
+                        onJobUpdate({ ...job, disposition: next || null });
+                      })
+                      .catch((err) => {
+                        setDisposition(job.disposition ?? "");
+                        onError(err instanceof Error ? err.message : String(err));
+                      })
+                      .finally(() => setSavingDisposition(false));
+                  }}
+                >
+                  <option value="">Not set</option>
+                  {DISPOSITION_OPTIONS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </SelectField>
+                <span className={dispositionClass(disposition || null)}>{dispositionLabel(disposition || null)}</span>
+              </div>
+            ) : null}
             {extraction?.customer_intent && <p className="intent">Intent: {extraction.customer_intent}</p>}
             <ul className="checklist">
               {(extraction?.action_items ?? []).slice(0, 5).map((item) => (
@@ -762,6 +823,8 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
         </div>
         {sentiment?.reasoning && <p className="reasoning">{sentiment.reasoning}</p>}
       </section>
+
+      <IntroductionScriptPanel intro={result?.introduction_script} onSeek={seekTo} />
 
       <ParticipantPerformancePanel
         items={result?.participant_performance ?? []}

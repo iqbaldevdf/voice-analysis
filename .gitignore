@@ -3,6 +3,8 @@ dist/
 data/normalized/
 data/uploads/
 data/jobs.json
+backend/data/
+backups/
 **/fc-recordings/
 **/exports/
 *.wav

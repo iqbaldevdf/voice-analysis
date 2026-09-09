@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
+  analyzeDbRecording,
   fetchAgent,
   formatDurationLong,
   type AgentDetailSummary,
   type AgentRecordingRow,
   type AgentSummary,
+  type QuarterWindow,
 } from "../api";
 import { CheckboxField, SearchField, SelectField, TextField } from "../components/ui/Fields";
+import { dispositionClass, dispositionLabel } from "../lib/disposition";
+import { agentDisplayName, agentInitials } from "../lib/agentInitials";
 
 type Props = {
   onError: (message: string | null) => void;
@@ -23,18 +27,15 @@ const CATEGORY_LABELS: Record<string, string> = {
   efficiency: "Efficiency",
 };
 
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-}
-
 function scoreTone(score: number | null | undefined): string {
   if (score == null) return "muted";
   if (score >= 75) return "ok";
   if (score >= 55) return "warn";
   return "danger";
+}
+
+function formatScore(score: number | null | undefined, digits = 1): string {
+  return score == null ? "—" : score.toFixed(digits);
 }
 
 function formatWhen(iso?: string | null): string {
@@ -63,8 +64,15 @@ export function AgentDetailView({ onError }: Props) {
   const [sortBy, setSortBy] = useState("createdTime");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [excludeVoicemail, setExcludeVoicemail] = useState(true);
+  const [appointmentOnly, setAppointmentOnly] = useState(false);
+  const [quarterId, setQuarterId] = useState("");
+  const [quarter, setQuarter] = useState<QuarterWindow | null>(null);
+  const [availableQuarters, setAvailableQuarters] = useState<QuarterWindow[]>([]);
   const [voicemailMaxSec, setVoicemailMaxSec] = useState(30);
   const [page, setPage] = useState(1);
+  const [analyzingIds, setAnalyzingIds] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchNotice, setBatchNotice] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
 
@@ -85,8 +93,13 @@ export function AgentDetailView({ onError }: Props) {
           page: pageNum,
           limit: 10,
           excludeVoicemail,
+          appointmentOnly,
+          quarter: quarterId || undefined,
         });
         setAgent(data.agent);
+        setQuarter(data.quarter);
+        setAvailableQuarters(data.availableQuarters ?? []);
+        if (!quarterId && data.quarter?.id) setQuarterId(data.quarter.id);
         setSummary(data.summary);
         setRecordings(data.recordings);
         setTotal(data.total);
@@ -97,15 +110,119 @@ export function AgentDetailView({ onError }: Props) {
         setLoading(false);
       }
     },
-    [agentId, search, statusFilter, dateFrom, dateTo, minDuration, maxDuration, sortBy, sortDir, excludeVoicemail],
+    [
+      agentId,
+      search,
+      statusFilter,
+      dateFrom,
+      dateTo,
+      minDuration,
+      maxDuration,
+      sortBy,
+      sortDir,
+      excludeVoicemail,
+      appointmentOnly,
+      quarterId,
+    ],
   );
 
   useEffect(() => {
     void refresh(1).catch((err) => onError(err instanceof Error ? err.message : String(err)));
-  }, [agentId, sortBy, sortDir, excludeVoicemail, dateFrom, dateTo]);
+  }, [agentId, sortBy, sortDir, excludeVoicemail, dateFrom, dateTo, appointmentOnly, quarterId]);
 
-  const coverage = agent?.recordingCount
-    ? Math.round((agent.analyzedCount / agent.recordingCount) * 100)
+  function rowKey(rec: AgentRecordingRow): string {
+    return `${rec.callId}-${rec.recordingId}`;
+  }
+
+  function markAnalyzing(ids: string[], active: boolean) {
+    setAnalyzingIds((current) => {
+      const next = new Set(current);
+      for (const id of ids) {
+        if (active) next.add(id);
+        else next.delete(id);
+      }
+      return [...next];
+    });
+  }
+
+  async function analyzeRows(rows: AgentRecordingRow[]) {
+    const pending = rows.filter((row) => row.analysisStatus !== "completed");
+    if (pending.length === 0) {
+      setBatchNotice("Selected calls are already analyzed. Open a row to review the score.");
+      return;
+    }
+
+    const already = pending.filter((row) => analyzingIds.includes(rowKey(row)));
+    const queued = pending.filter((row) => !analyzingIds.includes(rowKey(row)));
+    if (queued.length === 0) {
+      onError(
+        already.length === 1
+          ? `Analysis is already running for call ${already[0].callId}. Wait for it to finish.`
+          : `Analysis is already running for calls ${already.map((row) => row.callId).join(", ")}. Wait for those to finish.`,
+      );
+      return;
+    }
+
+    onError(null);
+    setBatchNotice(
+      queued.length === 1
+        ? `Analyzing call ${queued[0].callId}…`
+        : `Analyzing ${queued.length} calls: ${queued.map((row) => row.callId).join(", ")}.`,
+    );
+    markAnalyzing(queued.map(rowKey), true);
+
+    const results: Array<{ callId: number; ok: true } | { callId: number; ok: false; message: string }> = [];
+    for (const row of queued) {
+      try {
+        await analyzeDbRecording(row.callId, row.recordingId);
+        results.push({ callId: row.callId, ok: true });
+      } catch (err) {
+        results.push({
+          callId: row.callId,
+          ok: false,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    markAnalyzing(queued.map(rowKey), false);
+    setSelectedIds((current) => current.filter((id) => !queued.some((row) => rowKey(row) === id)));
+    await refresh(page);
+
+    const failed = results.filter((item) => !item.ok);
+    const done = results.filter((item) => item.ok);
+    if (failed.length === 0) {
+      setBatchNotice(
+        done.length === 1
+          ? `Call ${done[0].callId} analyzed. The call score is on the row.`
+          : `${done.length} calls analyzed. Call scores are on the table.`,
+      );
+      return;
+    }
+
+    const lines = failed.map((item) => `Call ${item.callId}: ${item.message}`);
+    if (done.length > 0) {
+      setBatchNotice(`${done.length} call${done.length === 1 ? "" : "s"} analyzed.`);
+    } else {
+      setBatchNotice(null);
+    }
+    onError(
+      failed.length === 1
+        ? lines[0]
+        : `${failed.length} calls could not be analyzed. ${lines.join(" ")}`,
+    );
+  }
+
+  async function handleAnalyze(rec: AgentRecordingRow) {
+    if (rec.analysisStatus === "completed") {
+      navigate(`/recordings/${rec.callId}/${rec.recordingId}`);
+      return;
+    }
+    await analyzeRows([rec]);
+  }
+
+  const coverage = summary?.connects
+    ? Math.round((summary.analyzedConnects / summary.connects) * 100)
     : 0;
   const categories = Object.entries(summary?.categoryAverages ?? {});
 
@@ -113,12 +230,26 @@ export function AgentDetailView({ onError }: Props) {
     <div className="agents-page">
       <header className="viewport-header">
         <div className="agent-profile-head">
-          <span className="avatar agent lg">{agent ? initials(agent.name) : "?"}</span>
+          <span className="avatar agent lg">{agent ? agentInitials(agent.name) : "?"}</span>
           <div>
-            <h1>{agent?.name ?? "Agent"}</h1>
+            <h1>{agentDisplayName(agent?.name)}</h1>
+            <p className="panel-sub">{quarter?.label ?? "Current quarter"}</p>
           </div>
         </div>
         <div className="viewport-actions">
+          <SelectField
+            id="agent-quarter"
+            className="agent-quarter"
+            label="Quarter"
+            value={quarter?.id ?? quarterId}
+            onChange={(e) => setQuarterId(e.target.value)}
+          >
+            {(availableQuarters.length > 0 ? availableQuarters : quarter ? [quarter] : []).map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </SelectField>
           <button type="button" className="btn ghost" onClick={() => navigate("/agents")}>
             All agents
           </button>
@@ -127,37 +258,41 @@ export function AgentDetailView({ onError }: Props) {
 
       <section className="kpi-row agent-kpi">
         <article className="kpi-card">
-          <span>Average performance</span>
-          <strong>{agent?.averageScore != null ? agent.averageScore.toFixed(1) : "—"}</strong>
-          <em>{agent?.analyzedCount ?? 0} scored conversations</em>
-        </article>
-        <article className="kpi-card">
-          <span>Calls spoken</span>
-          <strong>{agent?.callCount ?? 0}</strong>
+          <span>Performance</span>
+          <strong>{formatScore(summary?.averagePerformance)}</strong>
           <em>
-            {summary?.inbound ?? 0} inbound · {summary?.outbound ?? 0} outbound
+            {summary?.scoredConnects
+              ? `${summary.scoredConnects} scored connects`
+              : summary?.analyzedConnects
+                ? "Not scored yet. These calls were rate-limited."
+                : "0 scored connects"}
           </em>
         </article>
         <article className="kpi-card">
-          <span>Recordings</span>
-          <strong>{agent?.recordingCount ?? 0}</strong>
-          <em>{summary?.pendingAnalysis ?? 0} still need analysis</em>
+          <span>Call quality</span>
+          <strong>{formatScore(summary?.averageCallQuality)}</strong>
+          <em>
+            clarity {formatScore(summary?.averageClarity, 0)} · speech rate {formatScore(summary?.averageSpeechRateScore, 0)}
+          </em>
         </article>
         <article className="kpi-card">
-          <span>Time on calls</span>
-          <strong>{formatDurationLong(summary?.totalDurationSec ?? 0)}</strong>
-          <em>
-            {summary?.talkDurationSec
-              ? `${formatDurationLong(summary.talkDurationSec)} agent talk`
-              : "Talk time appears after analysis"}
-          </em>
+          <span>Calls processed (connects)</span>
+          <strong>{summary?.connects ?? 0}</strong>
+          <em>{summary?.analyzedConnects ?? 0} analyzed</em>
         </article>
         <article className="kpi-card">
           <span>Speech rate</span>
-          <strong>
-            {summary?.averageWordsPerSecond != null ? summary.averageWordsPerSecond.toFixed(1) : "—"}
-          </strong>
+          <strong>{formatScore(summary?.averageWordsPerSecond)}</strong>
           <em>words / second</em>
+        </article>
+        <article className="kpi-card">
+          <span>Introduction script</span>
+          <strong>{formatScore(summary?.averageIntroductionScore, 0)}</strong>
+          <em>
+            {summary?.introductionScoredConnects
+              ? `${summary.introductionScoredConnects} scored · opening pitch themes`
+              : "Re-analyze calls for intro score"}
+          </em>
         </article>
       </section>
 
@@ -165,7 +300,7 @@ export function AgentDetailView({ onError }: Props) {
         <article className="panel agent-span">
           <h2 className="panel-title">Coverage</h2>
           <p className="panel-sub">
-            First call {formatWhen(agent?.firstCallAt)} · last call {formatWhen(agent?.lastCallAt)}
+            {quarter?.label ?? "Quarter"} analyzed connects · first call {formatWhen(agent?.firstCallAt)}
           </p>
           <div className="agent-coverage">
             <span>Analyzed</span>
@@ -177,6 +312,7 @@ export function AgentDetailView({ onError }: Props) {
         </article>
         <article className="panel">
           <h2 className="panel-title">Category averages</h2>
+          <p className="panel-sub">{quarter?.label ?? "Current quarter"}</p>
           {categories.length === 0 ? (
             <p className="empty soft">Scores appear after a call is analyzed.</p>
           ) : (
@@ -264,6 +400,12 @@ export function AgentDetailView({ onError }: Props) {
             checked={excludeVoicemail}
             onChange={(e) => setExcludeVoicemail(e.target.checked)}
           />
+          <CheckboxField
+            id="agent-ag"
+            label="Appointment generated"
+            checked={appointmentOnly}
+            onChange={(e) => setAppointmentOnly(e.target.checked)}
+          />
           <button type="submit" className="btn secondary">
             Apply filters
           </button>
@@ -275,10 +417,24 @@ export function AgentDetailView({ onError }: Props) {
           <div>
             <h2 className="panel-title">Recordings</h2>
           </div>
-          <span className="muted-inline">
-            {total} result{total === 1 ? "" : "s"} · page {page} of {totalPages}
-          </span>
+          <div className="viewport-actions">
+            <button
+              type="button"
+              className="btn primary compact"
+              disabled={selectedIds.length === 0}
+              onClick={() => {
+                const chosen = recordings.filter((rec) => selectedIds.includes(rowKey(rec)));
+                void analyzeRows(chosen);
+              }}
+            >
+              Analyze selected{selectedIds.length > 0 ? ` (${selectedIds.length})` : ""}
+            </button>
+            <span className="muted-inline">
+              {total} result{total === 1 ? "" : "s"} · page {page} of {totalPages}
+            </span>
+          </div>
         </div>
+        {batchNotice ? <p className="panel-sub">{batchNotice}</p> : null}
         <div className="list-meta-row">
           <span />
           <div className="sort-controls">
@@ -308,28 +464,68 @@ export function AgentDetailView({ onError }: Props) {
           <table className="data-table">
             <thead>
               <tr>
+                <th>
+                  <input
+                    type="checkbox"
+                    aria-label="Select calls that need analysis"
+                    checked={
+                      recordings.some((rec) => rec.analysisStatus !== "completed") &&
+                      recordings
+                        .filter((rec) => rec.analysisStatus !== "completed")
+                        .every((rec) => selectedIds.includes(rowKey(rec)))
+                    }
+                    onChange={(e) => {
+                      const pending = recordings
+                        .filter((rec) => rec.analysisStatus !== "completed")
+                        .map(rowKey);
+                      setSelectedIds((current) =>
+                        e.target.checked
+                          ? [...new Set([...current, ...pending])]
+                          : current.filter((id) => !pending.includes(id)),
+                      );
+                    }}
+                  />
+                </th>
                 <th>When</th>
                 <th>Customer</th>
+                <th>Answered</th>
                 <th>Direction</th>
                 <th>Duration</th>
                 <th>Talk</th>
                 <th>Speech rate</th>
+                <th>Disposition</th>
                 <th>Status</th>
-                <th>Score</th>
+                <th>Intro</th>
+                <th>Call score</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="empty soft">Loading recordings…</td>
+                  <td colSpan={13} className="empty soft">Loading recordings…</td>
                 </tr>
               ) : recordings.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="empty soft">No recordings match these filters.</td>
+                  <td colSpan={13} className="empty soft">No recordings match these filters.</td>
                 </tr>
               ) : (
                 recordings.map((rec) => (
-                  <tr key={`${rec.callId}-${rec.recordingId}`}>
+                  <tr key={rowKey(rec)}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select call ${rec.callId}`}
+                        disabled={rec.analysisStatus === "completed"}
+                        checked={selectedIds.includes(rowKey(rec))}
+                        onChange={(e) => {
+                          const id = rowKey(rec);
+                          setSelectedIds((current) =>
+                            e.target.checked ? [...current, id] : current.filter((item) => item !== id),
+                          );
+                        }}
+                      />
+                    </td>
                     <td>
                       <button
                         type="button"
@@ -346,6 +542,11 @@ export function AgentDetailView({ onError }: Props) {
                       <strong>{rec.customerName || "Customer"}</strong>
                       <div className="muted-inline">{rec.customerPhone || rec.phoneNumber || "—"}</div>
                     </td>
+                    <td>
+                      <span className={`badge ${rec.answered ? "ok" : "muted"}`}>
+                        {rec.answered ? "Answered" : "Not answered"}
+                      </span>
+                    </td>
                     <td className="capitalize">{rec.direction || "—"}</td>
                     <td>{rec.durationSec != null ? formatDurationLong(rec.durationSec) : "—"}</td>
                     <td>
@@ -356,15 +557,62 @@ export function AgentDetailView({ onError }: Props) {
                     </td>
                     <td>{rec.wordsPerSecond != null ? `${rec.wordsPerSecond.toFixed(1)} w/s` : "—"}</td>
                     <td>
-                      <span className={`badge ${rec.analysisStatus === "completed" ? "ok" : "muted"}`}>
-                        {rec.analysisStatus === "completed" ? "Analyzed" : "Needs analysis"}
+                      {rec.disposition ? (
+                        <span className={dispositionClass(rec.disposition)}>{dispositionLabel(rec.disposition)}</span>
+                      ) : (
+                        <span className="muted-inline">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          rec.analysisStatus === "completed"
+                            ? "ok"
+                            : rec.analysisStatus === "failed"
+                              ? "danger"
+                              : "muted"
+                        }`}
+                      >
+                        {rec.analysisStatus === "completed"
+                          ? "Analyzed"
+                          : rec.analysisStatus === "failed"
+                            ? "Failed"
+                            : rec.analysisStatus === "running" || rec.analysisStatus === "queued"
+                              ? "Analyzing"
+                              : "Needs analysis"}
                       </span>
                     </td>
                     <td>
-                      <span className={`badge ${scoreTone(rec.overallScore)}`}>
-                        {rec.overallScore != null ? rec.overallScore.toFixed(0) : "—"}
+                      {rec.introductionScore != null ? (
+                        <span className={`badge ${scoreTone(rec.introductionScore)}`} title={rec.introductionRank ?? undefined}>
+                          {rec.introductionScore.toFixed(0)}
+                        </span>
+                      ) : (
+                        <span className="muted-inline">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`badge ${scoreTone(rec.callQualityScore ?? rec.overallScore)}`}>
+                        {rec.callQualityScore != null
+                          ? rec.callQualityScore.toFixed(0)
+                          : rec.overallScore != null
+                            ? rec.overallScore.toFixed(0)
+                            : "—"}
                       </span>
-                      {rec.highlight ? <div className="agent-note">{rec.highlight}</div> : null}
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn primary compact"
+                        disabled={analyzingIds.includes(rowKey(rec))}
+                        onClick={() => void handleAnalyze(rec)}
+                      >
+                        {analyzingIds.includes(rowKey(rec))
+                          ? "Analyzing…"
+                          : rec.analysisStatus === "completed"
+                            ? "Open"
+                            : "Analyze"}
+                      </button>
                     </td>
                   </tr>
                 ))

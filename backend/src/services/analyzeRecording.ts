@@ -126,7 +126,7 @@ export async function analyzeRecordingOnce(
   if (voicemail) {
     throw Object.assign(
       new Error(
-        `Skipping voicemail / short call (≤${VOICEMAIL_MAX_DURATION_SEC}s). Duration: ${durationSec ?? "unknown"}s`,
+        `Call ${doc.callId} was skipped. It looks like a voicemail or a short call (≤${VOICEMAIL_MAX_DURATION_SEC}s). Duration: ${durationSec ?? "unknown"}s.`,
       ),
       { status: 422 },
     );
@@ -141,9 +141,10 @@ export async function analyzeRecordingOnce(
   // Only block if another process in this server is actively running it.
   // Stale "running" in Mongo (crash/restart) is allowed to retry.
   if (runningKeys.has(runKey)) {
-    throw Object.assign(new Error("Analysis already in progress for this recording"), {
-      status: 409,
-    });
+    throw Object.assign(
+      new Error(`Analysis is already running for call ${doc.callId}. Wait for it to finish before starting it again.`),
+      { status: 409 },
+    );
   }
 
   runningKeys.add(runKey);

@@ -2,6 +2,9 @@ import { MongoClient, type Db, type Collection } from "mongodb";
 
 export type AnalysisStatus = "none" | "queued" | "running" | "completed" | "failed";
 
+/** Reviewer-set sales result. Separate from the model's Successful / Unsuccessful / Unclear. */
+export type SalesDisposition = "hung_up" | "not_interested" | "appointment" | "follow_up" | "dnc";
+
 export type RecordingParticipant = {
   role: string;
   name?: string | null;
@@ -31,6 +34,8 @@ export type RecordingDocument = {
   isConnected?: boolean;
   /** Freshcaller participant call_status when known. */
   callStatus?: number | null;
+  /** Reviewer-set sales disposition. Null until set. Appointment is the AG filter. */
+  disposition?: SalesDisposition | null;
   localPath?: string | null;
   localFileName?: string | null;
   analysisStatus: AnalysisStatus;

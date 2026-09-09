@@ -47,6 +47,15 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, value))
 
 
+def _speech_rate_score(words_per_sec: float | None) -> float | None:
+    if words_per_sec is None:
+        return None
+    if 2.0 <= words_per_sec <= 3.2:
+        return 100.0
+    distance = (2.0 - words_per_sec) if words_per_sec < 2.0 else words_per_sec - 3.2
+    return round(_clamp(100.0 - (distance / 0.5) * 25.0), 1)
+
+
 def _word_count(text: str) -> int:
     return len(re.findall(r"[A-Za-z0-9']+", text))
 
@@ -321,9 +330,18 @@ def build_call_analytics(
         + (35.0 if disconnected else 100.0) * 0.15
     )
 
+    agent_metric = next((item for item in speaker_metrics if item.role_guess == "agent"), None)
+    agent_wps = None
+    if agent_metric is not None and agent_metric.talk_time_sec > 0:
+        agent_wps = agent_metric.words_spoken / agent_metric.talk_time_sec
+    elif agent_metric is not None:
+        agent_wps = agent_metric.words_per_minute / 60
+
     call_quality = CallQuality(
         overall_score=round(overall, 1),
         recording_quality_score=round(recording_quality, 1),
+        clarity_score=round(recording_quality, 1),
+        speech_rate_score=_speech_rate_score(agent_wps),
         fluency_score=round(fluency_score, 1),
         energy_score=round(energy_score, 1),
         avg_response_time_sec=round(avg_response, 2),

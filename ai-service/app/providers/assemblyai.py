@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 import httpx
 
+from app.introduction_script import score_introduction_script
 from app.participant_performance import run_participant_performance
 from app.analytics import (
     attach_sentiment_to_utterances,
@@ -155,15 +156,20 @@ class AssemblyAIProvider:
             payload["transcript_id"] = transcript_id
 
         with httpx.Client(timeout=120.0) as client:
-            response = client.post(
-                self.llm_gateway_url,
-                headers={**self._headers(), "content-type": "application/json"},
-                json=payload,
-            )
-            if response.status_code >= 400:
-                raise RuntimeError(
-                    f"LLM Gateway error ({response.status_code}): {response.text[:400]}"
+            response = None
+            for attempt in range(4):
+                response = client.post(
+                    self.llm_gateway_url,
+                    headers={**self._headers(), "content-type": "application/json"},
+                    json=payload,
                 )
+                if response.status_code != 429:
+                    break
+                time.sleep(1.5 * (attempt + 1))
+            if response is None or response.status_code >= 400:
+                status = response.status_code if response is not None else 0
+                detail = response.text[:400] if response is not None else "no response"
+                raise RuntimeError(f"LLM Gateway error ({status}): {detail}")
             body = response.json()
             content = body.get("choices", [{}])[0].get("message", {}).get("content")
             if not content:
@@ -549,6 +555,11 @@ Transcript excerpt:
         if any(item.note for item in participant_performance):
             notes.extend(item.note for item in participant_performance if item.note)
 
+        introduction_script = score_introduction_script(
+            utterances=utterances,
+            role_hints=role_map or role_hints,
+        )
+
         if not sentiment_segments and not llm_sentiment.available:
             notes.append("Sentiment analysis unavailable for this file.")
 
@@ -565,6 +576,7 @@ Transcript excerpt:
             call_quality=call_quality,
             ai_extraction=ai_extraction,
             participant_performance=participant_performance,
+            introduction_script=introduction_script,
             provider="assemblyai",
             transcript_id=transcript_id,
             notes=notes,

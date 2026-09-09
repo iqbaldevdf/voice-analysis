@@ -53,9 +53,13 @@ export type SentimentTimelinePoint = {
   label: "POSITIVE" | "NEUTRAL" | "NEGATIVE";
 };
 
+export type SalesDisposition = "hung_up" | "not_interested" | "appointment" | "follow_up" | "dnc";
+
 export type CallQuality = {
   overall_score: number;
   recording_quality_score: number;
+  clarity_score?: number | null;
+  speech_rate_score?: number | null;
   fluency_score: number;
   energy_score: number;
   avg_response_time_sec: number;
@@ -144,6 +148,29 @@ export type ScoreExplanation = {
   evidence: EvidenceRef[];
 };
 
+export type IntroductionThemeResult = {
+  id: string;
+  label: string;
+  matched: boolean;
+  matchedPhrase?: string | null;
+  quote?: string | null;
+  start?: number | null;
+  end?: number | null;
+};
+
+export type IntroductionScriptScore = {
+  score: number;
+  rank: string;
+  themesTotal: number;
+  themesMatched: number;
+  openingDurationSec: number;
+  agentTurnsReviewed: number;
+  themes: IntroductionThemeResult[];
+  missedThemes: string[];
+  evidence: EvidenceRef[];
+  note?: string | null;
+};
+
 export type ParticipantPerformance = {
   speaker: string;
   participantRole: string;
@@ -187,6 +214,7 @@ export type CallAnalysisResult = {
   call_quality: CallQuality;
   ai_extraction: AiExtraction;
   participant_performance?: ParticipantPerformance[];
+  introduction_script?: IntroductionScriptScore;
   provider?: string;
   transcript_id?: string | null;
   notes?: string[];
@@ -224,6 +252,9 @@ export type AnalysisJob = {
   result?: CallAnalysisResult;
   callMeta?: CallMeta;
   freshcallerCallId?: number;
+  recordingId?: number;
+  disposition?: SalesDisposition | null;
+  answered?: boolean;
 };
 
 export type RecordingInfo = {
@@ -277,6 +308,19 @@ export type ExportJobRecord = {
 
 const API_BASE = "/api";
 
+function readApiError(body: string, status: number): string {
+  const trimmed = body.trim();
+  if (!trimmed) return `Request failed (${status})`;
+  try {
+    const parsed = JSON.parse(trimmed) as { error?: unknown; message?: string };
+    if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error;
+    if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
+  } catch {
+    return trimmed;
+  }
+  return trimmed;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -288,7 +332,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(body || `Request failed (${response.status})`);
+    throw new Error(readApiError(body, response.status));
   }
 
   return response.json() as Promise<T>;
@@ -383,9 +427,12 @@ export type DbRecordingListItem = {
   recordingUrl: string;
   durationSec?: number | null;
   isVoicemail?: boolean;
+  isConnected?: boolean;
+  answered?: boolean;
   localFileName?: string | null;
   hasLocalAudio: boolean;
   analysisStatus: DbAnalysisStatus;
+  disposition?: SalesDisposition | null;
   analysisError?: string | null;
   analyzedAt?: string | null;
   createdAt: string;
@@ -461,6 +508,17 @@ export function fetchDbRecordings(params?: DbRecordingsQuery) {
 export function fetchRecordingListings(params?: DbRecordingsQuery) {
   const qs = recordingsQueryString(params);
   return request<DbRecordingsResponse>(`/recordings/db/listings${qs ? `?${qs}` : ""}`);
+}
+
+export function updateRecordingDisposition(
+  callId: number,
+  recordingId: number,
+  disposition: SalesDisposition | null,
+) {
+  return request<{ recording: DbRecordingDetail }>(`/recordings/db/${callId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ recordingId, disposition }),
+  });
 }
 
 export function fetchDbRecording(callId: number, options?: { recordingId?: number; includeAnalysis?: boolean }) {
@@ -563,6 +621,7 @@ export type SyncStatusResponse = {
     note?: string | null;
   };
   running: boolean;
+  runningCallDate?: string | null;
   previousCallDate: string;
   lastJob: SyncJob | null;
   lastCronJob?: SyncJob | null;
@@ -705,7 +764,13 @@ export type AgentRecordingRow = {
   customerName?: string | null;
   customerPhone?: string | null;
   analysisStatus: string;
+  disposition?: SalesDisposition | null;
+  answered?: boolean;
   overallScore?: number | null;
+  callQualityScore?: number | null;
+  scoreNote?: string | null;
+  clarityScore?: number | null;
+  speechRateScore?: number | null;
   wordsPerSecond?: number | null;
   talkPercentage?: number | null;
   talkDurationSec?: number | null;
@@ -713,16 +778,40 @@ export type AgentRecordingRow = {
   questionCount?: number | null;
   highlight?: string | null;
   categoryScores?: Record<string, number | null> | null;
+  introductionScore?: number | null;
+  introductionRank?: string | null;
+};
+
+export type QuarterWindow = {
+  id: string;
+  label: string;
+  fromDate: string;
+  toDate: string;
 };
 
 export type AgentDetailSummary = {
+  connects: number;
+  analyzedConnects: number;
+  scoredConnects: number;
+  qualityScoredConnects?: number;
+  averagePerformance: number | null;
+  averageCallQuality: number | null;
+  averageClarity: number | null;
+  averageSpeechRateScore: number | null;
   inbound: number;
   outbound: number;
   pendingAnalysis: number;
   totalDurationSec: number;
   talkDurationSec: number;
   averageWordsPerSecond: number | null;
+  averageIntroductionScore: number | null;
+  introductionScoredConnects: number;
   categoryAverages: Record<string, number>;
+};
+
+export type AgentRecordingsQuery = DbRecordingsQuery & {
+  quarter?: string;
+  appointmentOnly?: boolean;
 };
 
 export function fetchAgents(params?: { page?: number; limit?: number; q?: string }) {
@@ -740,10 +829,16 @@ export function fetchAgents(params?: { page?: number; limit?: number; q?: string
   }>(`/agents${qs ? `?${qs}` : ""}`);
 }
 
-export function fetchAgent(agentId: string, params?: DbRecordingsQuery) {
-  const qs = recordingsQueryString(params);
+export function fetchAgent(agentId: string, params?: AgentRecordingsQuery) {
+  const search = new URLSearchParams(recordingsQueryString(params));
+  if (params?.quarter) search.set("quarter", params.quarter);
+  if (params?.appointmentOnly) search.set("appointmentOnly", "true");
+  const qs = search.toString();
   return request<{
     agent: AgentSummary;
+    quarter: QuarterWindow;
+    availableQuarters: QuarterWindow[];
+    appointmentOnly: boolean;
     summary: AgentDetailSummary;
     recordings: AgentRecordingRow[];
     total: number;

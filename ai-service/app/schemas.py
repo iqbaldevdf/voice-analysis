@@ -63,6 +63,8 @@ class SentimentTimelinePoint(BaseModel):
 class CallQuality(BaseModel):
     overall_score: float = Field(..., description="0-100 composite call quality")
     recording_quality_score: float = Field(..., description="0-100 from ASR confidence / clarity proxy")
+    clarity_score: Optional[float] = Field(None, description="0-100 clarity used by the agent score page")
+    speech_rate_score: Optional[float] = Field(None, description="0-100 agent speech-rate score, full marks 2.0-3.2 words/s")
     fluency_score: float
     energy_score: float
     avg_response_time_sec: float
@@ -160,6 +162,29 @@ class ScoreExplanation(BaseModel):
     evidence: list[EvidenceRef] = Field(default_factory=list)
 
 
+class IntroductionThemeResult(BaseModel):
+    id: str
+    label: str
+    matched: bool = False
+    matchedPhrase: Optional[str] = None
+    quote: Optional[str] = None
+    start: Optional[float] = None
+    end: Optional[float] = None
+
+
+class IntroductionScriptScore(BaseModel):
+    score: float = 0.0
+    rank: str = "Needs work"
+    themesTotal: int = 0
+    themesMatched: int = 0
+    openingDurationSec: float = 0.0
+    agentTurnsReviewed: int = 0
+    themes: list[IntroductionThemeResult] = Field(default_factory=list)
+    missedThemes: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceRef] = Field(default_factory=list)
+    note: Optional[str] = None
+
+
 class ParticipantPerformanceAnalysis(BaseModel):
     speaker: str
     participantRole: str = "unknown"
@@ -205,6 +230,7 @@ class CallAnalysisResult(BaseModel):
     call_quality: CallQuality
     ai_extraction: AiExtraction
     participant_performance: list[ParticipantPerformanceAnalysis] = Field(default_factory=list)
+    introduction_script: IntroductionScriptScore = Field(default_factory=IntroductionScriptScore)
     provider: str = "assemblyai"
     transcript_id: Optional[str] = None
     notes: list[str] = Field(default_factory=list)

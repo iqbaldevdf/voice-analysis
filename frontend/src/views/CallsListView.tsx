@@ -15,6 +15,7 @@ import {
   SelectField,
   TextField,
 } from "../components/ui/Fields";
+import { agentDisplayName, agentInitials } from "../lib/agentInitials";
 
 type Props = {
   mode: "meetings" | "recordings";
@@ -51,7 +52,7 @@ function initials(name?: string | null): string {
 
 function meetingTitle(rec: DbRecordingListItem): string {
   const customer = rec.customerName || "Customer";
-  const agent = rec.agentName || "Agent";
+  const agent = agentDisplayName(rec.agentName);
   return `${agent} ↔ ${customer}`;
 }
 
@@ -79,7 +80,7 @@ export function CallsListView({
   const [sortBy, setSortBy] = useState<SortKey>("createdTime");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [excludeVoicemail, setExcludeVoicemail] = useState(true);
-  const [analyzingId, setAnalyzingId] = useState<number | null>(null);
+  const [analyzingIds, setAnalyzingIds] = useState<string[]>([]);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [voicemailMaxSec, setVoicemailMaxSec] = useState(30);
 
@@ -145,15 +146,24 @@ export function CallsListView({
     }
   }
 
+  function recordingKey(rec: DbRecordingListItem): string {
+    return `${rec.callId}-${rec.recordingId}`;
+  }
+
   async function handleViewAnalysis(rec: DbRecordingListItem) {
     if (rec.analysisStatus === "completed") {
       onOpenDbRecording(rec.callId, rec.recordingId);
       return;
     }
+    const key = recordingKey(rec);
+    if (analyzingIds.includes(key)) {
+      onError(`Analysis is already running for call ${rec.callId}. Wait for it to finish.`);
+      return;
+    }
 
     try {
       onError(null);
-      setAnalyzingId(rec.callId);
+      setAnalyzingIds((current) => [...current, key]);
       const data = await analyzeDbRecording(rec.callId, rec.recordingId);
       await refresh(page);
       onOpenDbRecording(data.recording.callId, data.recording.recordingId);
@@ -161,7 +171,7 @@ export function CallsListView({
       onError(err instanceof Error ? err.message : String(err));
       void refresh(page).catch(() => undefined);
     } finally {
-      setAnalyzingId(null);
+      setAnalyzingIds((current) => current.filter((id) => id !== key));
     }
   }
 
@@ -336,12 +346,12 @@ export function CallsListView({
           ) : (
             recordings.map((rec) => {
               const when = rec.createdTime ? new Date(rec.createdTime) : null;
-              const busy = analyzingId === rec.callId;
+              const busy = analyzingIds.includes(recordingKey(rec));
               const ready = rec.analysisStatus === "completed";
               return (
                 <article key={`${rec.callId}-${rec.recordingId}`} className="meeting-card">
                   <div className="meeting-avatars" aria-hidden>
-                    <span className="avatar agent">{initials(rec.agentName || "Agent")}</span>
+                    <span className="avatar agent">{agentInitials(rec.agentName)}</span>
                     <span className="avatar customer">
                       {initials(rec.customerName || "Customer")}
                     </span>
@@ -422,6 +432,7 @@ export function CallsListView({
                       </button>
                     </th>
                     <th>Customer</th>
+                    <th>Answered</th>
                     <th>Direction</th>
                     <th>
                       <button
@@ -458,8 +469,13 @@ export function CallsListView({
                   {recordings.map((rec) => (
                     <tr key={`${rec.callId}-${rec.recordingId}`}>
                       <td>{rec.callId}</td>
-                      <td>{rec.agentName || "—"}</td>
+                      <td>{rec.agentName ? agentDisplayName(rec.agentName) : "—"}</td>
                       <td>{rec.customerName || "—"}</td>
+                      <td>
+                        <span className={`badge ${rec.answered ? "ok" : "muted"}`}>
+                          {rec.answered ? "Answered" : "Not answered"}
+                        </span>
+                      </td>
                       <td className="capitalize">{rec.direction || "—"}</td>
                       <td>
                         {rec.createdTime ? new Date(rec.createdTime).toLocaleString() : "—"}
@@ -489,10 +505,10 @@ export function CallsListView({
                         <button
                           type="button"
                           className="btn primary compact"
-                          disabled={analyzingId === rec.callId}
+                          disabled={analyzingIds.includes(recordingKey(rec))}
                           onClick={() => void handleViewAnalysis(rec)}
                         >
-                          {analyzingId === rec.callId
+                          {analyzingIds.includes(recordingKey(rec))
                             ? "Analyzing…"
                             : rec.analysisStatus === "completed"
                               ? "Open"

@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Router } from "express";
 import { recordingsCollection, recordingListingsCollection, type RecordingDocument } from "../db/mongo.js";
+import { isDisposition } from "../scoring/agentQuarter.js";
 import { toListingDoc, upsertRecordingListing } from "../db/recordingListings.js";
 import { analyzeRecordingOnce } from "../services/analyzeRecording.js";
 import {
+  excludeForwardedMailFilter,
   excludeVoicemailFilter,
+  isAnsweredCall,
   isLikelyVoicemail,
   VOICEMAIL_MAX_DURATION_SEC,
 } from "../voicemail.js";
@@ -25,9 +28,12 @@ export type RecordingListItem = {
   recordingUrl: string;
   durationSec?: number | null;
   isVoicemail?: boolean;
+  isConnected?: boolean;
+  answered?: boolean;
   localFileName?: string | null;
   hasLocalAudio: boolean;
   analysisStatus: RecordingDocument["analysisStatus"];
+  disposition?: RecordingDocument["disposition"];
   analysisError?: string | null;
   analyzedAt?: Date | null;
   createdAt: Date;
@@ -65,9 +71,12 @@ function toListItem(doc: RecordingDocument): RecordingListItem {
     recordingUrl: doc.recordingUrl,
     durationSec,
     isVoicemail: doc.isVoicemail ?? isLikelyVoicemail(durationSec),
+    isConnected: doc.isConnected,
+    answered: isAnsweredCall(doc),
     localFileName: doc.localFileName,
     hasLocalAudio: Boolean(doc.localPath),
     analysisStatus: doc.analysisStatus,
+    disposition: doc.disposition ?? null,
     analysisError: doc.analysisError,
     analyzedAt: doc.analyzedAt,
     createdAt: doc.createdAt,
@@ -118,10 +127,9 @@ function parseListQuery(req: {
     skipRaw != null && Number.isFinite(skipRaw) ? Math.max(0, skipRaw) : (page - 1) * limit;
 
   const filter: Record<string, unknown> = {};
-  const and: Record<string, unknown>[] = [];
+  const and: Record<string, unknown>[] = [excludeForwardedMailFilter()];
 
   if (excludeVoicemail) {
-    and.push({ isVoicemail: { $ne: true } });
     and.push(excludeVoicemailFilter());
   }
 
@@ -290,7 +298,10 @@ export function createDbRecordingsRouter(): Router {
 
       const totalPages = Math.max(1, Math.ceil(total / parsed.limit));
       res.json({
-        recordings: docs,
+        recordings: docs.map((doc) => ({
+          ...doc,
+          answered: isAnsweredCall(doc),
+        })),
         total,
         limit: parsed.limit,
         skip: parsed.skip,
@@ -383,6 +394,52 @@ export function createDbRecordingsRouter(): Router {
       }
 
       res.sendFile(path.resolve(doc.localPath));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  /** PATCH /recordings/db/:callId — set or clear the reviewer sales disposition. */
+  router.patch("/:callId", async (req, res) => {
+    try {
+      const callId = Number(req.params.callId);
+      if (!Number.isFinite(callId)) {
+        res.status(400).json({ error: "Invalid callId" });
+        return;
+      }
+
+      const recordingId = Number(req.body?.recordingId);
+      if (!Number.isFinite(recordingId)) {
+        res.status(400).json({ error: "recordingId is required" });
+        return;
+      }
+
+      const raw = req.body?.disposition;
+      const disposition = raw == null || raw === "" ? null : raw;
+      if (disposition != null && !isDisposition(disposition)) {
+        res.status(400).json({ error: "Invalid disposition" });
+        return;
+      }
+
+      const existing = await recordingsCollection().findOne({ callId, recordingId });
+      if (!existing) {
+        res.status(404).json({ error: `Recording not found for call ${callId}` });
+        return;
+      }
+
+      const updatedAt = new Date();
+      await recordingsCollection().updateOne(
+        { callId, recordingId },
+        { $set: { disposition, updatedAt } },
+      );
+      const updated = await recordingsCollection().findOne({ callId, recordingId });
+      if (!updated) {
+        res.status(404).json({ error: `Recording not found for call ${callId}` });
+        return;
+      }
+      await upsertRecordingListing(updated);
+      res.json({ recording: toDetail(updated, false) });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });

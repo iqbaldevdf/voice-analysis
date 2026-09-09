@@ -194,7 +194,11 @@ export function SyncDashboardView({ onError, onOpenLogs, onOpenRecordingsForDate
       <section className="panel run-panel">
         <div className="panel-head">
           <h2 className="panel-title">Run sync</h2>
-          {status?.running || busy ? <span className="badge warn">In progress</span> : null}
+          {status?.running || busy ? (
+            <span className="badge warn">
+              {status?.runningCallDate ? `Sync running for ${status.runningCallDate}` : "In progress"}
+            </span>
+          ) : null}
         </div>
         <div className="run-controls">
           <TextField

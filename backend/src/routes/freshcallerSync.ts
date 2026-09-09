@@ -5,7 +5,7 @@ import {
   type ExportJobDocument,
 } from "../db/syncCollections.js";
 import { getCronRuntime, isCronEnabled } from "../freshcaller/cron.js";
-import { isDailySyncRunning, runDailySync } from "../freshcaller/dailySyncPipeline.js";
+import { activeSyncCallDate, isDailySyncRunning, runDailySync } from "../freshcaller/dailySyncPipeline.js";
 import { previousIstCallDate } from "../freshcaller/dateUtils.js";
 
 function serializeJob(doc: ExportJobDocument) {
@@ -45,6 +45,7 @@ export function createFreshcallerSyncRouter(): Router {
         },
         lastCronJob: lastCron ? serializeJob(lastCron) : null,
         running: isDailySyncRunning(),
+        runningCallDate: activeSyncCallDate(),
         previousCallDate: previousIstCallDate(),
         lastJob: last ? serializeJob(last) : null,
       });
