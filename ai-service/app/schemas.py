@@ -185,6 +185,32 @@ class IntroductionScriptScore(BaseModel):
     note: Optional[str] = None
 
 
+class SpeakerMappingSignal(BaseModel):
+    signal: str
+    winner: str
+    weight: float = 0.0
+    detail: Optional[str] = None
+
+
+class SpeakerMapping(BaseModel):
+    mapping: dict[str, str] = Field(default_factory=dict)
+    confidence: float = 0.0
+    method: str = "unknown"
+    mapping_uncertain: bool = False
+    agent_speaker: Optional[str] = None
+    customer_speaker: Optional[str] = None
+    signals: list[SpeakerMappingSignal] = Field(default_factory=list)
+
+
+class TranscriptDisplayLine(BaseModel):
+    speaker: str
+    role: str
+    display_name: Optional[str] = None
+    start: float
+    end: float
+    text: str
+
+
 class ParticipantPerformanceAnalysis(BaseModel):
     speaker: str
     participantRole: str = "unknown"
@@ -221,6 +247,8 @@ class CallAnalysisResult(BaseModel):
     language: str
     duration_sec: float
     speakers: list[str] = Field(default_factory=list)
+    speaker_mapping: SpeakerMapping = Field(default_factory=SpeakerMapping)
+    transcript_display: list[TranscriptDisplayLine] = Field(default_factory=list)
     utterances: list[DiarizedUtterance] = Field(default_factory=list)
     words: list[DiarizedWord] = Field(default_factory=list)
     sentiment_segments: list[SentimentSegment] = Field(default_factory=list)

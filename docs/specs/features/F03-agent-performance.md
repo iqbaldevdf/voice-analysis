@@ -10,19 +10,25 @@ As a team lead, I see each agent’s averages for the **current calendar quarter
 
 ## KPI cards (per selected quarter)
 
+Same six cards as call details; each value is the **average across analyzed connects** in the selected quarter:
+
 | Card | Calculation |
 | --- | --- |
-| Performance | Mean of agent `overallScore` on analyzed connects with a score |
-| Call quality | Mean of call quality on analyzed connects |
-| Calls processed (connects) | Count of connects in quarter; subline = analyzed count |
-| Speech rate | Mean agent words/sec on analyzed connects |
+| Overall Score | Mean call-quality score (clarity + speech rate) per analyzed connect |
+| Talk / Listen Ratio | Mean agent and customer talk % from speaker metrics |
+| Avg Response Time | Mean `call_quality.avg_response_time_sec` |
+| Silence (Total) | Mean silence % and seconds |
+| Interruptions | Mean `call_quality.interruptions_count` |
+| Speech rate | Mean agent words/min (from words/sec × 60); no score subline in UI |
+
+Overall Score subline: `analyzed / connects` (e.g. `5 / 12`).
 
 ## Quarter rules
 
 - Quarters: Q1–Q4 in Asia/Kolkata (see glossary).
 - Page opens on **current** quarter.
 - Changing quarter recalculates all cards; **no data is deleted**.
-- Category averages panel: plain average per category across scored connects.
+- Category break-up panel: six categories in two groups of three (Communication skills; Engagement & outcomes). Turn taking is omitted from the UI. Plain average per category across scored connects.
 
 ## Filters affecting KPIs + table
 

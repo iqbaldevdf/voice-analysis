@@ -11,6 +11,13 @@ export type RecordingParticipant = {
   phone?: string | null;
 };
 
+export type AnalysisCorrection = {
+  at: Date;
+  reason: string;
+  remapOnly: boolean;
+  speakerOverride?: Record<string, string>;
+};
+
 /** One Freshcaller call that has a downloadable recording. */
 export type RecordingDocument = {
   callId: number;
@@ -42,6 +49,7 @@ export type RecordingDocument = {
   analysisError?: string | null;
   analyzedAt?: Date | null;
   analysisResult?: unknown;
+  analysisCorrections?: AnalysisCorrection[];
   createdAt: Date;
   updatedAt: Date;
 };

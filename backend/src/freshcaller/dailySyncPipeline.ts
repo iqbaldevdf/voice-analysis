@@ -11,6 +11,7 @@ import {
 } from "../db/syncCollections.js";
 import { classifyFreshcallerCall } from "./connection.js";
 import { FreshcallerClient, summarizeCall } from "./client.js";
+import type { FreshcallerCall } from "./types.js";
 import { appendCronLog, createRunId, withExportJobId, type CronRunContext } from "./cronLogger.js";
 import { callDateFromCreatedTime, istDayRangeIso, previousIstCallDate } from "./dateUtils.js";
 import { extractCallsJsonFromZip } from "./zipCalls.js";
@@ -233,82 +234,151 @@ export async function runDailySync(
     });
 
     const client = new FreshcallerClient();
+    let jobId: number | null = null;
+    let summarized: FreshcallerCall[] = [];
+    let sourceFile = `calls_${callDate}`;
 
-    await patchExportJob(runId, {
-      status: "in_progress",
-      phase: "export",
-      phaseMessage: "Requesting Freshcaller account export",
-    });
-
-    const created = await client.createExport({ startDate, endDate });
-    const jobId = created.id;
-    ctx = withExportJobId(ctx, jobId);
-
-    await patchExportJob(runId, {
-      jobId,
-      phase: "poll",
-      phaseMessage: `Export job ${jobId} created; polling status`,
-    });
-    await appendCronLog(ctx, "info", "export", `Export job created: ${jobId}`, {
-      status: created.status,
-    });
-
-    let downloadUrl: string | undefined;
-    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-      const status = await client.getJob(jobId);
-      const bulk = status.bulk_job;
-      const remoteStatus = String(bulk.status || "").toLowerCase();
-
+    try {
       await patchExportJob(runId, {
-        phase: "poll",
-        phaseMessage: `Poll ${attempt + 1}/${MAX_POLL_ATTEMPTS}: ${bulk.status}`,
+        status: "in_progress",
+        phase: "export",
+        phaseMessage: "Requesting Freshcaller account export",
       });
 
-      if (attempt === 0 || attempt % 5 === 0) {
-        await appendCronLog(ctx, "info", "poll", `Job ${jobId} status=${bulk.status}`, {
-          attempt: attempt + 1,
-          path: bulk.job_data?.path ?? null,
+      const created = await client.createExport({ startDate, endDate });
+      jobId = created.id;
+      ctx = withExportJobId(ctx, jobId);
+
+      await patchExportJob(runId, {
+        jobId,
+        phase: "poll",
+        phaseMessage: `Export job ${jobId} created; polling status`,
+      });
+      await appendCronLog(ctx, "info", "export", `Export job created: ${jobId}`, {
+        status: created.status,
+      });
+
+      let downloadUrl: string | undefined;
+      for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+        const status = await client.getJob(jobId);
+        const bulk = status.bulk_job;
+        const remoteStatus = String(bulk.status || "").toLowerCase();
+
+        await patchExportJob(runId, {
+          phase: "poll",
+          phaseMessage: `Poll ${attempt + 1}/${MAX_POLL_ATTEMPTS}: ${bulk.status}`,
         });
+
+        if (attempt === 0 || attempt % 5 === 0) {
+          await appendCronLog(ctx, "info", "poll", `Job ${jobId} status=${bulk.status}`, {
+            attempt: attempt + 1,
+            path: bulk.job_data?.path ?? null,
+            errors: bulk.errors ?? null,
+          });
+        }
+
+        if (remoteStatus === "completed" && bulk.job_data?.path) {
+          downloadUrl = bulk.job_data.path;
+          break;
+        }
+        if (remoteStatus === "failed" || remoteStatus === "error") {
+          const detail = bulk.errors?.[0];
+          const extra = detail?.error_type ? ` (${detail.error_type})` : "";
+          throw new Error(`Freshcaller export job ${jobId} failed with status: ${bulk.status}${extra}`);
+        }
+        await sleep(POLL_INTERVAL_MS);
       }
 
-      if (remoteStatus === "completed" && bulk.job_data?.path) {
-        downloadUrl = bulk.job_data.path;
-        break;
+      if (!downloadUrl) {
+        throw new Error(`Freshcaller export job ${jobId} timed out waiting for completion`);
       }
-      if (remoteStatus === "failed" || remoteStatus === "error") {
-        throw new Error(`Freshcaller export job ${jobId} failed with status: ${bulk.status}`);
+
+      await patchExportJob(runId, {
+        status: "downloading",
+        phase: "zip",
+        phaseMessage: "Downloading export ZIP",
+        downloadPath: downloadUrl,
+      });
+      await appendCronLog(ctx, "info", "zip", "Downloading export ZIP", { downloadUrl });
+
+      await fs.mkdir(EXPORTS_DIR, { recursive: true });
+      const zipBuffer = await client.downloadZip(downloadUrl);
+      const zipPath = path.join(EXPORTS_DIR, `export_${jobId}_${callDate}.zip`);
+      await fs.writeFile(zipPath, zipBuffer);
+      await appendCronLog(ctx, "info", "zip", `ZIP saved (${zipBuffer.length} bytes)`, { zipPath });
+
+      await patchExportJob(runId, {
+        status: "indexing",
+        phase: "index",
+        phaseMessage: "Parsing calls from export ZIP",
+      });
+
+      const extracted = extractCallsJsonFromZip(zipBuffer);
+      if (extracted.empty) {
+        const finishedAt = new Date();
+        const message = `No calls in Freshcaller export for ${callDate} (empty ZIP)`;
+        await patchExportJob(runId, {
+          status: "completed",
+          phase: "complete",
+          phaseMessage: message,
+          callCount: 0,
+          callsWithRecording: 0,
+          voicemailSkipped: 0,
+          callsIndexed: 0,
+          audioDownloaded: 0,
+          audioFailed: 0,
+          finishedAt,
+          error: null,
+        });
+        await appendCronLog(ctx, "info", "complete", message, {
+          zipBytes: zipBuffer.length,
+          zipPath,
+        });
+        return {
+          runId,
+          callDate,
+          status: "completed",
+          jobId,
+          message,
+        };
       }
-      await sleep(POLL_INTERVAL_MS);
+
+      const parsed = JSON.parse(extracted.rawText) as { calls?: Record<string, unknown>[] };
+      const rawCalls = Array.isArray(parsed.calls) ? parsed.calls : [];
+      summarized = rawCalls.map((item) => summarizeCall(item));
+      sourceFile = extracted.entryName;
+    } catch (exportError) {
+      const exportMessage = exportError instanceof Error ? exportError.message : String(exportError);
+      await appendCronLog(
+        ctx,
+        "warn",
+        "export",
+        `Bulk export unavailable; using calls list API fallback: ${exportMessage}`,
+        { callDate, startDate, endDate },
+      );
+      await patchExportJob(runId, {
+        status: "indexing",
+        phase: "index",
+        phaseMessage: "Fetching calls via Freshcaller list API (export fallback)",
+        error: null,
+      });
+
+      summarized = await client.listCallsInRange({ startDate, endDate });
+      sourceFile = `calls_api_${callDate}`;
+      jobId = null;
     }
 
-    if (!downloadUrl) {
-      throw new Error(`Freshcaller export job ${jobId} timed out waiting for completion`);
-    }
+    const withRecording = summarized.filter((c) => c.recording != null);
 
-    await patchExportJob(runId, {
-      status: "downloading",
-      phase: "zip",
-      phaseMessage: "Downloading export ZIP",
-      downloadPath: downloadUrl,
-    });
-    await appendCronLog(ctx, "info", "zip", "Downloading export ZIP", { downloadUrl });
-
-    await fs.mkdir(EXPORTS_DIR, { recursive: true });
-    const zipBuffer = await client.downloadZip(downloadUrl);
-    const zipPath = path.join(EXPORTS_DIR, `export_${jobId}_${callDate}.zip`);
-    await fs.writeFile(zipPath, zipBuffer);
-    await appendCronLog(ctx, "info", "zip", `ZIP saved (${zipBuffer.length} bytes)`, { zipPath });
-
-    await patchExportJob(runId, {
-      status: "indexing",
-      phase: "index",
-      phaseMessage: "Parsing calls from export ZIP",
+    await appendCronLog(ctx, "info", "index", `Parsed ${summarized.length} calls`, {
+      withRecording: withRecording.length,
+      sourceFile,
+      viaApiFallback: jobId == null,
     });
 
-    const extracted = extractCallsJsonFromZip(zipBuffer);
-    if (extracted.empty) {
+    if (summarized.length === 0) {
       const finishedAt = new Date();
-      const message = `No calls in Freshcaller export for ${callDate} (empty ZIP)`;
+      const message = `No calls returned from Freshcaller for ${callDate}`;
       await patchExportJob(runId, {
         status: "completed",
         phase: "complete",
@@ -322,10 +392,7 @@ export async function runDailySync(
         finishedAt,
         error: null,
       });
-      await appendCronLog(ctx, "info", "complete", message, {
-        zipBytes: zipBuffer.length,
-        zipPath,
-      });
+      await appendCronLog(ctx, "info", "complete", message, { callDate });
       return {
         runId,
         callDate,
@@ -334,16 +401,6 @@ export async function runDailySync(
         message,
       };
     }
-
-    const parsed = JSON.parse(extracted.rawText) as { calls?: Record<string, unknown>[] };
-    const rawCalls = Array.isArray(parsed.calls) ? parsed.calls : [];
-    const summarized = rawCalls.map((item) => summarizeCall(item));
-    const withRecording = summarized.filter((c) => c.recording != null);
-
-    await appendCronLog(ctx, "info", "index", `Parsed ${summarized.length} calls`, {
-      withRecording: withRecording.length,
-      sourceFile: extracted.entryName,
-    });
 
     let voicemailSkipped = 0;
     let callsIndexed = 0;
@@ -378,7 +435,7 @@ export async function runDailySync(
         callId: call.id,
         recordingId: recording.id,
         exportJobId: jobId,
-        sourceFile: extracted.entryName,
+        sourceFile,
         direction: call.direction,
         createdTime: call.created_time,
         callDate: derivedCallDate,

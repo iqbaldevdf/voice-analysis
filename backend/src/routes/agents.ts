@@ -3,6 +3,7 @@ import { agentsCollection, backfillAgentsFromRecordings } from "../db/agents.js"
 import { recordingsCollection, type RecordingDocument } from "../db/mongo.js";
 import {
   agentPerformance,
+  callMetricsFromResult,
   callQualityFromResult,
   inQuarter,
   introductionScriptFromResult,
@@ -10,6 +11,7 @@ import {
   parseQuarter,
   recentQuarters,
   recordingCallDate,
+  summarizeAgentQuarterStats,
 } from "../scoring/agentQuarter.js";
 import { fillMissingPerformanceScores } from "../scoring/fillPerformanceScore.js";
 import {
@@ -142,6 +144,7 @@ function serializeAgent(doc: {
   callCount: number;
   recordingCount: number;
   analyzedCount: number;
+  appointmentCount: number;
   averageScore: number | null;
   firstCallAt?: string | null;
   lastCallAt?: string | null;
@@ -154,6 +157,7 @@ function serializeAgent(doc: {
     callCount: doc.callCount,
     recordingCount: doc.recordingCount,
     analyzedCount: doc.analyzedCount,
+    appointmentCount: doc.appointmentCount ?? 0,
     averageScore: doc.averageScore,
     firstCallAt: doc.firstCallAt ?? null,
     lastCallAt: doc.lastCallAt ?? null,
@@ -168,6 +172,7 @@ export function createAgentsRouter(): Router {
       const page = Math.max(1, Number(req.query.page ?? 1) || 1);
       const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 20) || 20));
       const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+      const quarter = parseQuarter(typeof req.query.quarter === "string" ? req.query.quarter : undefined);
       const filter = q ? { name: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } } : {};
       const collection = agentsCollection();
       const [total, docs] = await Promise.all([
@@ -179,8 +184,55 @@ export function createAgentsRouter(): Router {
           .limit(limit)
           .toArray(),
       ]);
+
+      const agentIds = docs.map((doc) => doc.agentId);
+      const recordingsByAgent = new Map<string, AgentRecordingDoc[]>();
+      if (agentIds.length > 0) {
+        const recordings = (await recordingsCollection()
+          .find({ agentId: { $in: agentIds } })
+          .project({
+            agentId: 1,
+            callId: 1,
+            callDate: 1,
+            createdTime: 1,
+            analysisStatus: 1,
+            analysisResult: 1,
+            disposition: 1,
+            isConnected: 1,
+            isVoicemail: 1,
+            callNotes: 1,
+          })
+          .toArray()) as Array<AgentRecordingDoc & { agentId?: string }>;
+
+        for (const recording of recordings) {
+          if (!recording.agentId) continue;
+          const bucket = recordingsByAgent.get(recording.agentId) ?? [];
+          bucket.push(recording);
+          recordingsByAgent.set(recording.agentId, bucket);
+        }
+      }
+
+      const agents = docs.map((doc) => {
+        const base = serializeAgent(doc);
+        const stats = summarizeAgentQuarterStats(
+          recordingsByAgent.get(doc.agentId) ?? [],
+          quarter,
+          isConnectedConversation,
+          isForwardedMailCall,
+        );
+        return {
+          ...base,
+          recordingCount: stats.connects,
+          analyzedCount: stats.analyzedCount,
+          averageScore: stats.averageScore,
+          appointmentCount: stats.appointmentCount,
+        };
+      });
+
       res.json({
-        agents: docs.map(serializeAgent),
+        agents,
+        quarter,
+        availableQuarters: recentQuarters(),
         total,
         page,
         limit,
@@ -265,6 +317,9 @@ export function createAgentsRouter(): Router {
       const rows = scoreDocs.map(toAgentRow);
 
       const completed = rows.filter((row) => row.analysisStatus === "completed");
+      const callMetrics = scoreDocs
+        .filter((doc) => doc.analysisStatus === "completed")
+        .map((doc) => callMetricsFromResult(doc.analysisResult));
       const scored = completed.filter((row) => typeof row.overallScore === "number");
       const qualityRows = completed.filter((row) => typeof row.callQualityScore === "number");
       const introRows = completed.filter((row) => typeof row.introductionScore === "number");
@@ -304,7 +359,14 @@ export function createAgentsRouter(): Router {
           averageCallQuality: mean(qualityRows.map((row) => row.callQualityScore)),
           averageClarity: mean(qualityRows.map((row) => row.clarityScore)),
           averageSpeechRateScore: mean(qualityRows.map((row) => row.speechRateScore)),
-          averageWordsPerSecond: mean(completed.map((row) => row.wordsPerSecond)),
+          averageWordsPerSecond: mean(callMetrics.map((row) => row.wordsPerSecond)),
+          averageOverallScore: mean(callMetrics.map((row) => row.overallScore)),
+          averageAgentTalkRatioPct: mean(callMetrics.map((row) => row.agentTalkRatioPct)),
+          averageCustomerTalkRatioPct: mean(callMetrics.map((row) => row.customerTalkRatioPct)),
+          averageResponseTimeSec: mean(callMetrics.map((row) => row.avgResponseTimeSec)),
+          averageSilenceRatioPct: mean(callMetrics.map((row) => row.silenceRatioPct)),
+          averageSilenceSec: mean(callMetrics.map((row) => row.silenceSec)),
+          averageInterruptions: mean(callMetrics.map((row) => row.interruptionsCount)),
           averageIntroductionScore: mean(introRows.map((row) => row.introductionScore)),
           introductionScoredConnects: introRows.length,
           inbound: rows.filter((row) => row.direction === "incoming" || row.direction === "inbound").length,

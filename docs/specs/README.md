@@ -38,7 +38,8 @@ This folder is the **source of truth** for what VoiceIQ should do. Code implemen
 | F04 | [Disposition & call outcome](./features/F04-disposition.md) | Partial (manual disposition; AI auto-set planned) |
 | F05 | [Recordings list & filters](./features/F05-recordings-list.md) | Implemented |
 | F06 | [Voicemail & connect rules](./features/F06-voicemail-filtering.md) | Implemented |
-| F07 | [AssemblyAI transcript pipeline](./features/F07-assemblyai-transcript-pipeline.md) | Draft |
+| F07 | [Introduction script compliance](./features/F07-introduction-script.md) | Implemented |
+| F07 | [AssemblyAI transcript pipeline](./features/F07-assemblyai-transcript-pipeline.md) | Partial |
 
 ### Scoring detail (canonical)
 

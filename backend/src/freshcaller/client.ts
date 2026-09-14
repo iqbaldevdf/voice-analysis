@@ -40,7 +40,17 @@ export type BulkJobResponse = {
     job_data?: {
       path?: string;
     };
+    errors?: Array<{ error_type?: string; message?: string | null }>;
     links?: Array<{ href: string; method: string; rel: string }>;
+  };
+};
+
+type CallsListResponse = {
+  calls?: Record<string, unknown>[];
+  meta?: {
+    total_pages?: number;
+    current_page?: number;
+    total_count?: number;
   };
 };
 
@@ -90,6 +100,41 @@ export class FreshcallerClient {
       throw new Error(`Freshcaller export response missing id: ${JSON.stringify(data)}`);
     }
     return data;
+  }
+
+  /**
+   * Paginated fallback when Freshcaller bulk export jobs fail.
+   * Uses GET /api/v1/calls with by_time[from|to] (same IST window as export).
+   */
+  async listCallsInRange(input: CreateExportInput): Promise<FreshcallerCall[]> {
+    const perPage = 1000;
+    const all: FreshcallerCall[] = [];
+    let page = 1;
+    let totalPages = 1;
+
+    while (page <= totalPages) {
+      const params = new URLSearchParams({
+        per_page: String(perPage),
+        page: String(page),
+        "by_time[from]": input.startDate,
+        "by_time[to]": input.endDate,
+      });
+      const response = await fetch(`${this.baseUrl}/api/v1/calls?${params}`, {
+        method: "GET",
+        headers: authHeaders(this.apiAuth),
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Freshcaller calls list failed (${response.status}): ${body.slice(0, 300)}`);
+      }
+      const data = (await response.json()) as CallsListResponse;
+      const batch = Array.isArray(data.calls) ? data.calls : [];
+      all.push(...batch.map((item) => summarizeCall(item)));
+      totalPages = Math.max(1, Number(data.meta?.total_pages ?? page));
+      page += 1;
+    }
+
+    return all;
   }
 
   async getJob(jobId: number): Promise<BulkJobResponse> {

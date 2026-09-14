@@ -10,7 +10,7 @@ As a reviewer, I analyze a connect once and get transcript, scores, sentiment, a
 
 ## Rules
 
-1. Analysis runs **at most once** per `(callId, recordingId)` unless failed retry.
+1. Analysis runs **at most once** per `(callId, recordingId)` unless failed retry or **force re-analyze**.
 2. Voicemail / ≤30s connects are rejected with 422 (F06).
 3. Audio path: download → normalize 16 kHz mono → AI service.
 4. Result stored in `recording.analysisResult`; status `completed`.
@@ -33,6 +33,10 @@ As a reviewer, I analyze a connect once and get transcript, scores, sentiment, a
 - [x] AC3: Performance uses seven weighted categories when model succeeds.
 - [x] AC4: Rate-limit on performance leaves call quality intact.
 - [x] AC5: Call details page shows transcript and audio player.
+- [x] AC6: Call details page has **Re-analyze** (POST analyze with `force: true`) to replace transcript and scores.
+- [x] AC7: **Remap-only** (`remapOnly: true`) re-runs speaker mapping + LLM on stored utterances (skips STT).
+- [x] AC8: **Swap speakers** (`swapSpeakers: true` + `remapOnly`) swaps agent/customer labels; corrections logged in `analysisCorrections`.
+- [x] AC9: Swap is not a primary button; shown in review callout when mapping uncertain, otherwise under collapsed **Transcript troubleshooting**, with checkbox confirmation before swap.
 
 ## Implementation
 

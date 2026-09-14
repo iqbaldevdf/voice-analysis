@@ -211,6 +211,7 @@ def build_call_analytics(
     words: list[DiarizedWord],
     sentiment_segments: list[SentimentSegment],
     avg_asr_confidence: float | None,
+    role_hints: dict[str, str] | None = None,
 ) -> tuple[list[SpeakerMetrics], CallQuality, list[SentimentTimelinePoint]]:
     speakers = sorted({u.speaker for u in utterances}) or ["A"]
 
@@ -233,9 +234,16 @@ def build_call_analytics(
     silence_sec = max(0.0, duration_sec - sum(talk_time.values()))
     silence_ratio = (silence_sec / duration_sec * 100) if duration_sec > 0 else 0.0
 
-    ordered_by_talk = sorted(speakers, key=lambda s: talk_time[s], reverse=True)
-    agent_speaker = ordered_by_talk[0] if ordered_by_talk else None
-    customer_speaker = ordered_by_talk[1] if len(ordered_by_talk) > 1 else None
+    if role_hints:
+        agent_speaker = next((speaker for speaker, role in role_hints.items() if role == "agent"), None)
+        customer_speaker = next(
+            (speaker for speaker, role in role_hints.items() if role == "customer"),
+            None,
+        )
+    else:
+        ordered_by_talk = sorted(speakers, key=lambda s: talk_time[s], reverse=True)
+        agent_speaker = ordered_by_talk[0] if ordered_by_talk else None
+        customer_speaker = ordered_by_talk[1] if len(ordered_by_talk) > 1 else None
 
     speaker_metrics: list[SpeakerMetrics] = []
     fluency_scores: list[float] = []

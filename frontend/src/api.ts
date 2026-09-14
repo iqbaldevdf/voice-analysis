@@ -25,6 +25,32 @@ export type SentimentSegment = {
   confidence: number;
 };
 
+export type SpeakerMappingSignal = {
+  signal: string;
+  winner: string;
+  weight: number;
+  detail?: string | null;
+};
+
+export type SpeakerMapping = {
+  mapping: Record<string, string>;
+  confidence: number;
+  method: string;
+  mapping_uncertain?: boolean;
+  agent_speaker?: string | null;
+  customer_speaker?: string | null;
+  signals?: SpeakerMappingSignal[];
+};
+
+export type TranscriptDisplayLine = {
+  speaker: string;
+  role: string;
+  display_name?: string | null;
+  start: number;
+  end: number;
+  text: string;
+};
+
 export type SpeakerMetrics = {
   speaker: string;
   role_guess?: string | null;
@@ -205,6 +231,8 @@ export type CallAnalysisResult = {
   language: string;
   duration_sec: number;
   speakers: string[];
+  speaker_mapping?: SpeakerMapping;
+  transcript_display?: TranscriptDisplayLine[];
   utterances: DiarizedUtterance[];
   words: DiarizedWord[];
   sentiment_segments: SentimentSegment[];
@@ -536,13 +564,32 @@ export function dbRecordingAudioUrl(callId: number, recordingId?: number) {
   return `${API_BASE}/recordings/db/${callId}/audio${qs}`;
 }
 
-export function analyzeDbRecording(callId: number, recordingId?: number) {
+export type AnalyzeRecordingOptions = {
+  force?: boolean;
+  remapOnly?: boolean;
+  swapSpeakers?: boolean;
+  speakerOverride?: Record<string, string>;
+  correctionReason?: string;
+};
+
+export function analyzeDbRecording(
+  callId: number,
+  recordingId?: number,
+  options?: AnalyzeRecordingOptions,
+) {
   return request<{
     reused: boolean;
     recording: DbRecordingDetail;
   }>(`/recordings/db/${callId}/analyze`, {
     method: "POST",
-    body: JSON.stringify(recordingId != null ? { recordingId } : {}),
+    body: JSON.stringify({
+      ...(recordingId != null ? { recordingId } : {}),
+      ...(options?.force ? { force: true } : {}),
+      ...(options?.remapOnly ? { remapOnly: true } : {}),
+      ...(options?.swapSpeakers ? { swapSpeakers: true } : {}),
+      ...(options?.speakerOverride ? { speakerOverride: options.speakerOverride } : {}),
+      ...(options?.correctionReason ? { correctionReason: options.correctionReason } : {}),
+    }),
   });
 }
 
@@ -748,6 +795,7 @@ export type AgentSummary = {
   callCount: number;
   recordingCount: number;
   analyzedCount: number;
+  appointmentCount: number;
   averageScore: number | null;
   firstCallAt?: string | null;
   lastCallAt?: string | null;
@@ -804,6 +852,13 @@ export type AgentDetailSummary = {
   totalDurationSec: number;
   talkDurationSec: number;
   averageWordsPerSecond: number | null;
+  averageOverallScore: number | null;
+  averageAgentTalkRatioPct: number | null;
+  averageCustomerTalkRatioPct: number | null;
+  averageResponseTimeSec: number | null;
+  averageSilenceRatioPct: number | null;
+  averageSilenceSec: number | null;
+  averageInterruptions: number | null;
   averageIntroductionScore: number | null;
   introductionScoredConnects: number;
   categoryAverages: Record<string, number>;
@@ -814,14 +869,17 @@ export type AgentRecordingsQuery = DbRecordingsQuery & {
   appointmentOnly?: boolean;
 };
 
-export function fetchAgents(params?: { page?: number; limit?: number; q?: string }) {
+export function fetchAgents(params?: { page?: number; limit?: number; q?: string; quarter?: string }) {
   const search = new URLSearchParams();
   if (params?.page != null) search.set("page", String(params.page));
   if (params?.limit != null) search.set("limit", String(params.limit));
   if (params?.q) search.set("q", params.q);
+  if (params?.quarter) search.set("quarter", params.quarter);
   const qs = search.toString();
   return request<{
     agents: AgentSummary[];
+    quarter: QuarterWindow;
+    availableQuarters: QuarterWindow[];
     total: number;
     page: number;
     limit: number;

@@ -9,6 +9,7 @@ export type AgentDocument = {
   callCount: number;
   recordingCount: number;
   analyzedCount: number;
+  appointmentCount: number;
   averageScore: number | null;
   firstCallAt?: string | null;
   lastCallAt?: string | null;
@@ -70,6 +71,7 @@ export async function upsertAgentFromRecording(input: {
         callCount: 0,
         recordingCount: 0,
         analyzedCount: 0,
+        appointmentCount: 0,
         averageScore: null,
         createdAt: now,
       },
@@ -82,11 +84,12 @@ export async function upsertAgentFromRecording(input: {
 export async function refreshAgentStats(agentId: string): Promise<void> {
   const recordings = await recordingsCollection()
     .find({ agentId })
-    .project({ callId: 1, analysisStatus: 1, analysisResult: 1, createdTime: 1 })
+    .project({ callId: 1, analysisStatus: 1, analysisResult: 1, createdTime: 1, disposition: 1 })
     .toArray();
 
   const callIds = new Set<number>();
   let analyzedCount = 0;
+  let appointmentCount = 0;
   let scoreSum = 0;
   let scoreCount = 0;
   let firstCallAt: string | null = null;
@@ -103,6 +106,7 @@ export async function refreshAgentStats(agentId: string): Promise<void> {
     )?.participant_performance;
     const agentScore = performance?.find((item) => item.participantRole === "agent")?.overallScore;
     if (rec.analysisStatus === "completed") analyzedCount += 1;
+    if (rec.disposition === "appointment") appointmentCount += 1;
     if (typeof agentScore === "number") {
       scoreSum += agentScore;
       scoreCount += 1;
@@ -116,6 +120,7 @@ export async function refreshAgentStats(agentId: string): Promise<void> {
         callCount: callIds.size,
         recordingCount: recordings.length,
         analyzedCount,
+        appointmentCount,
         averageScore: scoreCount ? Math.round((scoreSum / scoreCount) * 10) / 10 : null,
         firstCallAt,
         lastCallAt,

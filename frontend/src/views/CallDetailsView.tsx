@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Cell,
   Pie,
@@ -15,17 +15,21 @@ import {
   ReferenceLine,
 } from "recharts";
 import {
+  analyzeDbRecording,
   fetchJob,
   formatDurationLong,
   formatTime,
   jobAudioUrl,
   normalizeTopics,
-  scoreTone,
   updateRecordingDisposition,
   type AnalysisJob,
+  type DiarizedUtterance,
   type SalesDisposition,
+  type SpeakerMapping,
   type SpeakerMetrics,
 } from "../api";
+import { loadDbRecordingJob } from "../lib/recordingJob";
+import { CallMetricsKpiRow } from "../components/CallMetricsKpiRow";
 import { IntroductionScriptPanel } from "../components/IntroductionScriptPanel";
 import { ParticipantPerformancePanel } from "../components/ParticipantPerformancePanel";
 import { SearchField, SelectField } from "../components/ui/Fields";
@@ -62,14 +66,36 @@ function statusLabel(status: AnalysisJob["status"]): string {
   }
 }
 
-function qualityLabel(score: number): string {
-  if (score >= 80) return "Good";
-  if (score >= 60) return "Fair";
-  return "Needs Improvement";
-}
-
 function pickRole(metrics: SpeakerMetrics[], role: "agent" | "customer"): SpeakerMetrics | undefined {
   return metrics.find((m) => m.role_guess === role) ?? (role === "agent" ? metrics[0] : metrics[1]);
+}
+
+function utteranceIsAgent(
+  utt: DiarizedUtterance,
+  mapping?: SpeakerMapping | null,
+  agentSpeaker?: string,
+  displayRole?: string | null,
+): boolean {
+  if (displayRole === "agent") return true;
+  if (displayRole === "customer") return false;
+  const mapped = mapping?.mapping?.[utt.speaker];
+  if (mapped === "agent") return true;
+  if (mapped === "customer") return false;
+  return Boolean(agentSpeaker && utt.speaker === agentSpeaker);
+}
+
+function speakerAssignmentSummary(
+  mapping: SpeakerMapping | null | undefined,
+  agentName: string,
+  customerName: string,
+) {
+  if (!mapping?.agent_speaker || !mapping.customer_speaker) return null;
+  return {
+    agentSpeaker: mapping.agent_speaker,
+    customerSpeaker: mapping.customer_speaker,
+    agentName,
+    customerName,
+  };
 }
 
 function sentimentEmoji(sentiment?: string): string {
@@ -88,39 +114,6 @@ function longestMonologueSec(
     best = Math.max(best, Math.max(0, u.end - u.start));
   }
   return best;
-}
-
-function QualityRing({ score, size = 72 }: { score: number; size?: number }) {
-  const clamped = Math.max(0, Math.min(100, score));
-  const radius = 34;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (clamped / 100) * circumference;
-  const tone = scoreTone(clamped);
-  const stroke = tone === "good" ? "#2f6f5e" : tone === "ok" ? "#b7791f" : "#8b3a3a";
-
-  return (
-    <div className="quality-ring" style={{ width: size, height: size }} aria-label={`Score ${Math.round(clamped)}`}>
-      <svg viewBox="0 0 80 80" width={size} height={size}>
-        <circle cx="40" cy="40" r={radius} fill="none" stroke="#e6ece8" strokeWidth="7" />
-        <circle
-          cx="40"
-          cy="40"
-          r={radius}
-          fill="none"
-          stroke={stroke}
-          strokeWidth="7"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          transform="rotate(-90 40 40)"
-        />
-      </svg>
-      <div className="quality-ring-label">
-        <strong className={tone}>{Math.round(clamped)}</strong>
-        <span>/100</span>
-      </div>
-    </div>
-  );
 }
 
 /** Semi-circle sentiment gauge matching the reference mock. */
@@ -184,8 +177,12 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
   const [mediaDuration, setMediaDuration] = useState(0);
   const [disposition, setDisposition] = useState<SalesDisposition | "">(job.disposition ?? "");
   const [savingDisposition, setSavingDisposition] = useState(false);
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [swapConfirmOpen, setSwapConfirmOpen] = useState(false);
+  const [swapConfirmChecked, setSwapConfirmChecked] = useState(false);
   const audioSrc = audioUrlOverride ?? jobAudioUrl(job.id);
   const isDbJob = job.id.startsWith("db-");
+  const canReanalyze = isDbJob && job.freshcallerCallId != null && job.recordingId != null;
 
   useEffect(() => {
     setDisposition(job.disposition ?? "");
@@ -227,6 +224,16 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
   const analysisDuration = result?.duration_sec ?? job.durationSec ?? 0;
   const topics = useMemo(() => normalizeTopics(extraction?.key_topics ?? []), [extraction]);
   const utterances = result?.utterances ?? [];
+  const speakerMapping = result?.speaker_mapping;
+  const speakerAssignment = speakerAssignmentSummary(speakerMapping, agentName, customerName);
+  const labelsLookUncertain = Boolean(speakerMapping?.mapping_uncertain);
+  const transcriptDisplayByKey = useMemo(() => {
+    const map = new Map<string, { role: string; display_name?: string | null }>();
+    for (const line of result?.transcript_display ?? []) {
+      map.set(`${line.start}-${line.speaker}`, line);
+    }
+    return map;
+  }, [result?.transcript_display]);
   const lastUtteranceEnd = utterances.reduce((max, utt) => Math.max(max, utt.end || 0), 0);
   const duration = Math.max(analysisDuration, mediaDuration, lastUtteranceEnd);
 
@@ -308,6 +315,76 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
 
   const created = meta?.createdTime ? new Date(meta.createdTime) : new Date(job.createdAt);
 
+  const reloadJob = useCallback(async () => {
+    const callId = job.freshcallerCallId;
+    const recordingId = job.recordingId;
+    if (!callId || !recordingId) return;
+    const data = await loadDbRecordingJob(callId, recordingId);
+    onJobUpdate(data.job);
+  }, [job.freshcallerCallId, job.recordingId, onJobUpdate]);
+
+  const runReanalyze = useCallback(
+    async (mode: "full" | "remap" | "swap") => {
+      const callId = job.freshcallerCallId;
+      const recordingId = job.recordingId;
+      if (!callId || !recordingId || reanalyzing) return;
+
+      setReanalyzing(true);
+      onError(null);
+      try {
+        if (mode === "full") {
+          await analyzeDbRecording(callId, recordingId, { force: true });
+        } else if (mode === "swap") {
+          await analyzeDbRecording(callId, recordingId, {
+            remapOnly: true,
+            swapSpeakers: true,
+            correctionReason: "speakers_swapped",
+          });
+        } else {
+          await analyzeDbRecording(callId, recordingId, {
+            remapOnly: true,
+            correctionReason: "remap_heuristics",
+          });
+        }
+        setSwapConfirmOpen(false);
+        setSwapConfirmChecked(false);
+        await reloadJob();
+      } catch (err) {
+        onError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setReanalyzing(false);
+      }
+    },
+    [job.freshcallerCallId, job.recordingId, reanalyzing, onError, reloadJob],
+  );
+
+  const handleFullReanalyze = useCallback(() => {
+    if (
+      !window.confirm(
+        "Re-analyze this call from audio? The transcript, speaker labels, and scores will be replaced.",
+      )
+    ) {
+      return;
+    }
+    void runReanalyze("full");
+  }, [runReanalyze]);
+
+  const handleRemapLabels = useCallback(() => {
+    if (
+      !window.confirm(
+        "Re-apply automatic speaker mapping on the existing transcript? Use this if labels look wrong after a pipeline update.",
+      )
+    ) {
+      return;
+    }
+    void runReanalyze("remap");
+  }, [runReanalyze]);
+
+  const handleConfirmSwap = useCallback(() => {
+    if (!swapConfirmChecked) return;
+    void runReanalyze("swap");
+  }, [runReanalyze, swapConfirmChecked]);
+
   if (job.status !== "completed" || !result || !cq) {
     return (
       <div className="details-page call-details-mock">
@@ -320,7 +397,18 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
             Status: <strong>{statusLabel(job.status)}</strong>
           </p>
           {job.error && <p className="error-banner">{job.error}</p>}
-          {job.status !== "failed" && <div className="pulse" aria-hidden />}
+          {canReanalyze && job.status === "failed" ? (
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={reanalyzing}
+              onClick={() => void handleFullReanalyze()}
+            >
+              {reanalyzing ? "Re-analyzing…" : "Re-analyze"}
+            </button>
+          ) : null}
+          {job.status !== "failed" && !reanalyzing && <div className="pulse" aria-hidden />}
+          {reanalyzing && <p className="panel-sub">Re-analyzing call… this may take a few minutes.</p>}
         </div>
       </div>
     );
@@ -418,62 +506,18 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
         </dl>
       </header>
 
-      {/* KPI strip */}
-      <section className="kpi-row">
-        <article className="kpi-card kpi-quality">
-          <span>Call Quality Score</span>
-          {quality.callQualityScore != null ? (
-            <QualityRing score={quality.callQualityScore} />
-          ) : (
-            <strong>—</strong>
-          )}
-          <em className={quality.callQualityScore != null ? scoreTone(quality.callQualityScore) : "muted"}>
-            {quality.callQualityScore != null ? qualityLabel(quality.callQualityScore) : "Not scored"}
-          </em>
-          <em>
-            clarity {quality.clarityScore != null ? quality.clarityScore.toFixed(0) : "—"} · speech rate{" "}
-            {quality.speechRateScore != null ? quality.speechRateScore.toFixed(0) : "—"}
-          </em>
-        </article>
-        <article className="kpi-card">
-          <span>Talk / Listen Ratio</span>
-          <strong>
-            {Math.round(talkYou)}% <small>You</small>
-          </strong>
-          <div className="ratio-bar" aria-hidden>
-            <i style={{ width: `${Math.max(4, talkYou)}%` }} />
-            <b style={{ width: `${Math.max(4, talkCustomer)}%` }} />
-          </div>
-          <em>{Math.round(talkCustomer)}% Customer</em>
-        </article>
-        <article className="kpi-card">
-          <span>Avg Response Time</span>
-          <strong>{cq.avg_response_time_sec.toFixed(1)}s</strong>
-          <em className={cq.avg_response_time_sec <= 2.5 ? "good" : "poor"}>
-            {cq.avg_response_time_sec <= 2.5 ? "Good" : "Needs Improvement"}
-          </em>
-        </article>
-        <article className="kpi-card">
-          <span>Silence (Total)</span>
-          <strong>{Math.round(cq.silence_ratio_pct)}%</strong>
-          <em>{formatDurationLong(silenceSec)}</em>
-        </article>
-        <article className="kpi-card">
-          <span>Interruptions</span>
-          <strong>{interruptions}</strong>
-          <em className={interruptions <= 2 ? "good" : "poor"}>
-            {interruptions <= 2 ? "Good" : "Needs Improvement"}
-          </em>
-        </article>
-        <article className="kpi-card">
-          <span>Speech rate</span>
-          <strong>{speechWordsPerSec != null ? speechWordsPerSec.toFixed(1) : "—"}</strong>
-          <em>
-            words / second
-            {quality.speechRateScore != null ? ` · score ${quality.speechRateScore.toFixed(0)}` : ""}
-          </em>
-        </article>
-      </section>
+      <CallMetricsKpiRow
+        overallScore={quality.callQualityScore}
+        talkYou={talkYou}
+        talkCustomer={talkCustomer}
+        avgResponseTimeSec={cq.avg_response_time_sec}
+        silenceRatioPct={cq.silence_ratio_pct}
+        silenceSec={silenceSec}
+        interruptions={interruptions}
+        speechWordsPerSec={speechWordsPerSec}
+        speechRateScore={quality.speechRateScore}
+        showSpeechRateScore={false}
+      />
 
       <section className="charts-grid three-col">
         <article className="panel chart-panel">
@@ -505,72 +549,87 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
           <div className="sentiment-panel-body">
             <SentimentGauge overall={sentiment?.overall || "NEUTRAL"} score={overallScore} />
             <div className="sent-bars">
-              <div>
-                <span>Positive</span>
+              <div className="sent-bar-row">
+                <span className="sent-bar-label">Positive</span>
                 <div className="mini-bar">
                   <i className="pos" style={{ width: `${sentimentBreakdown.pos}%` }} />
                 </div>
-                <b>{sentimentBreakdown.pos}%</b>
+                <b className="sent-bar-value">{sentimentBreakdown.pos}%</b>
               </div>
-              <div>
-                <span>Neutral</span>
+              <div className="sent-bar-row">
+                <span className="sent-bar-label">Neutral</span>
                 <div className="mini-bar">
                   <i className="neu" style={{ width: `${sentimentBreakdown.neu}%` }} />
                 </div>
-                <b>{sentimentBreakdown.neu}%</b>
+                <b className="sent-bar-value">{sentimentBreakdown.neu}%</b>
               </div>
-              <div>
-                <span>Negative</span>
+              <div className="sent-bar-row">
+                <span className="sent-bar-label">Negative</span>
                 <div className="mini-bar">
                   <i className="neg" style={{ width: `${sentimentBreakdown.neg}%` }} />
                 </div>
-                <b>{sentimentBreakdown.neg}%</b>
+                <b className="sent-bar-value">{sentimentBreakdown.neg}%</b>
               </div>
             </div>
           </div>
         </article>
 
         <article className="panel chart-panel">
-          <h2 className="panel-title">Call Outcome</h2>
           <div className="outcome-box">
-            <strong className={`outcome-badge outcome-${(extraction?.call_outcome || "unclear").toLowerCase()}`}>
-              {extraction?.call_outcome || "Unclear"}
-            </strong>
-            {canSetDisposition ? (
-              <div className="disposition-field">
-                <SelectField
-                  id="sales-disposition"
-                  label="Disposition"
-                  value={disposition}
-                  disabled={savingDisposition}
-                  onChange={(e) => {
-                    const next = e.target.value as SalesDisposition | "";
-                    const callId = job.freshcallerCallId;
-                    const recordingId = job.recordingId;
-                    if (callId == null || recordingId == null) return;
-                    setDisposition(next);
-                    setSavingDisposition(true);
-                    void updateRecordingDisposition(callId, recordingId, next || null)
-                      .then(() => {
-                        onJobUpdate({ ...job, disposition: next || null });
-                      })
-                      .catch((err) => {
-                        setDisposition(job.disposition ?? "");
-                        onError(err instanceof Error ? err.message : String(err));
-                      })
-                      .finally(() => setSavingDisposition(false));
-                  }}
-                >
-                  <option value="">Not set</option>
-                  {DISPOSITION_OPTIONS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </SelectField>
-                <span className={dispositionClass(disposition || null)}>{dispositionLabel(disposition || null)}</span>
+            <dl className="outcome-fields">
+              <div className="outcome-row">
+                <dt>Call Outcome</dt>
+                <dd>
+                  <span
+                    className={`outcome-badge outcome-${(extraction?.call_outcome || "unclear").toLowerCase()}`}
+                  >
+                    {extraction?.call_outcome || "Unclear"}
+                  </span>
+                </dd>
               </div>
-            ) : null}
+              <div className="outcome-row">
+                <dt>Disposition</dt>
+                <dd>
+                  {canSetDisposition ? (
+                    <SelectField
+                      id="sales-disposition"
+                      className="outcome-select"
+                      label="Disposition"
+                      value={disposition}
+                      disabled={savingDisposition}
+                      onChange={(e) => {
+                        const next = e.target.value as SalesDisposition | "";
+                        const callId = job.freshcallerCallId;
+                        const recordingId = job.recordingId;
+                        if (callId == null || recordingId == null) return;
+                        setDisposition(next);
+                        setSavingDisposition(true);
+                        void updateRecordingDisposition(callId, recordingId, next || null)
+                          .then(() => {
+                            onJobUpdate({ ...job, disposition: next || null });
+                          })
+                          .catch((err) => {
+                            setDisposition(job.disposition ?? "");
+                            onError(err instanceof Error ? err.message : String(err));
+                          })
+                          .finally(() => setSavingDisposition(false));
+                      }}
+                    >
+                      <option value="">Not set</option>
+                      {DISPOSITION_OPTIONS.map((item) => (
+                        <option key={item.value} value={item.value}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </SelectField>
+                  ) : (
+                    <span className={dispositionClass(disposition || null)}>
+                      {dispositionLabel(disposition || null)}
+                    </span>
+                  )}
+                </dd>
+              </div>
+            </dl>
             {extraction?.customer_intent && <p className="intent">Intent: {extraction.customer_intent}</p>}
             <ul className="checklist">
               {(extraction?.action_items ?? []).slice(0, 5).map((item) => (
@@ -657,7 +716,13 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
               {utterances.map((utt, idx) => {
                 const left = duration > 0 ? (utt.start / duration) * 100 : 0;
                 const width = duration > 0 ? ((utt.end - utt.start) / duration) * 100 : 0;
-                const isAgent = agentMetrics?.speaker === utt.speaker;
+                const displayLine = transcriptDisplayByKey.get(`${utt.start}-${utt.speaker}`);
+                const isAgent = utteranceIsAgent(
+                  utt,
+                  speakerMapping,
+                  agentMetrics?.speaker,
+                  displayLine?.role,
+                );
                 return (
                   <span
                     key={`${utt.start}-${idx}`}
@@ -685,7 +750,194 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
 
         <article className="panel transcript-panel">
           <div className="transcript-head">
-            <h2 className="panel-title">Transcript</h2>
+            <div className="transcript-head-title">
+              <h2 className="panel-title">Transcript</h2>
+              {canReanalyze ? (
+                <button
+                  type="button"
+                  className="btn secondary compact"
+                  disabled={reanalyzing}
+                  onClick={() => void handleFullReanalyze()}
+                  title="Re-transcribe from audio and replace all analysis"
+                >
+                  {reanalyzing ? "Re-analyzing…" : "Re-analyze"}
+                </button>
+              ) : null}
+            </div>
+            {canReanalyze && labelsLookUncertain && speakerAssignment ? (
+              <div className="speaker-fix-callout" role="region" aria-label="Speaker label review">
+                <p className="speaker-fix-callout-title">
+                  Speaker labels need review ({Math.round((speakerMapping?.confidence ?? 0) * 100)}%
+                  confidence)
+                </p>
+                <p className="speaker-fix-callout-copy soft">
+                  Current assignment: Speaker {speakerAssignment.agentSpeaker} → Agent (
+                  {speakerAssignment.agentName}), Speaker {speakerAssignment.customerSpeaker} → Customer (
+                  {speakerAssignment.customerName}). Only change labels if the transcript attribution looks
+                  wrong.
+                </p>
+                <div className="speaker-fix-actions">
+                  <button
+                    type="button"
+                    className="btn secondary compact"
+                    disabled={reanalyzing}
+                    onClick={() => void handleRemapLabels()}
+                  >
+                    {reanalyzing ? "Working…" : "Try auto-fix labels"}
+                  </button>
+                  {!swapConfirmOpen ? (
+                    <button
+                      type="button"
+                      className="btn secondary compact"
+                      disabled={reanalyzing}
+                      onClick={() => {
+                        setSwapConfirmOpen(true);
+                        setSwapConfirmChecked(false);
+                      }}
+                    >
+                      Agent & customer reversed?
+                    </button>
+                  ) : null}
+                </div>
+                {swapConfirmOpen && speakerAssignment ? (
+                  <div className="speaker-swap-confirm">
+                    <p className="speaker-swap-confirm-title">Confirm speaker swap</p>
+                    <ul className="speaker-swap-confirm-list">
+                      <li>
+                        Speaker {speakerAssignment.agentSpeaker}: Agent ({speakerAssignment.agentName}) →
+                        Customer
+                      </li>
+                      <li>
+                        Speaker {speakerAssignment.customerSpeaker}: Customer (
+                        {speakerAssignment.customerName}) → Agent
+                      </li>
+                    </ul>
+                    <p className="soft">
+                      Transcript text stays the same. Scores and sentiment will be recalculated. Do not
+                      continue if labels already look correct.
+                    </p>
+                    <label className="speaker-swap-ack">
+                      <input
+                        type="checkbox"
+                        checked={swapConfirmChecked}
+                        onChange={(e) => setSwapConfirmChecked(e.target.checked)}
+                      />
+                      I checked the transcript and the agent/customer names are reversed
+                    </label>
+                    <div className="speaker-fix-actions">
+                      <button
+                        type="button"
+                        className="btn secondary compact"
+                        disabled={reanalyzing}
+                        onClick={() => {
+                          setSwapConfirmOpen(false);
+                          setSwapConfirmChecked(false);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="btn compact"
+                        disabled={reanalyzing || !swapConfirmChecked}
+                        onClick={() => void handleConfirmSwap()}
+                      >
+                        {reanalyzing ? "Swapping…" : "Swap labels"}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {canReanalyze ? (
+              <details className="speaker-fix-advanced">
+                <summary>Transcript troubleshooting</summary>
+                <p className="soft">
+                  Use only when something looks wrong. If labels are already correct, leave them unchanged.
+                </p>
+                {speakerAssignment ? (
+                  <p className="speaker-fix-current soft">
+                    Current: Speaker {speakerAssignment.agentSpeaker} = Agent ({speakerAssignment.agentName}
+                    ), Speaker {speakerAssignment.customerSpeaker} = Customer ({speakerAssignment.customerName})
+                  </p>
+                ) : null}
+                <div className="speaker-fix-actions">
+                  {!labelsLookUncertain ? (
+                    <button
+                      type="button"
+                      className="btn secondary compact"
+                      disabled={reanalyzing || swapConfirmOpen}
+                      onClick={() => {
+                        setSwapConfirmOpen(true);
+                        setSwapConfirmChecked(false);
+                      }}
+                    >
+                      Agent & customer reversed?
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn secondary compact"
+                    disabled={reanalyzing}
+                    onClick={() => void handleRemapLabels()}
+                  >
+                    Re-apply auto labels
+                  </button>
+                  <button
+                    type="button"
+                    className="btn secondary compact"
+                    disabled={reanalyzing}
+                    onClick={() => void handleFullReanalyze()}
+                  >
+                    Full re-analyze from audio
+                  </button>
+                </div>
+                {!labelsLookUncertain && swapConfirmOpen && speakerAssignment ? (
+                  <div className="speaker-swap-confirm">
+                    <p className="speaker-swap-confirm-title">Confirm speaker swap</p>
+                    <ul className="speaker-swap-confirm-list">
+                      <li>
+                        Speaker {speakerAssignment.agentSpeaker}: Agent ({speakerAssignment.agentName}) →
+                        Customer
+                      </li>
+                      <li>
+                        Speaker {speakerAssignment.customerSpeaker}: Customer (
+                        {speakerAssignment.customerName}) → Agent
+                      </li>
+                    </ul>
+                    <label className="speaker-swap-ack">
+                      <input
+                        type="checkbox"
+                        checked={swapConfirmChecked}
+                        onChange={(e) => setSwapConfirmChecked(e.target.checked)}
+                      />
+                      I checked the transcript and the agent/customer names are reversed
+                    </label>
+                    <div className="speaker-fix-actions">
+                      <button
+                        type="button"
+                        className="btn secondary compact"
+                        disabled={reanalyzing}
+                        onClick={() => {
+                          setSwapConfirmOpen(false);
+                          setSwapConfirmChecked(false);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="btn compact"
+                        disabled={reanalyzing || !swapConfirmChecked}
+                        onClick={() => void handleConfirmSwap()}
+                      >
+                        {reanalyzing ? "Swapping…" : "Swap labels"}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </details>
+            ) : null}
             <SearchField
               id="transcript-search"
               value={search}
@@ -697,7 +949,14 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
           <div className="transcript-list" ref={transcriptRef}>
             {filteredUtterances.length === 0 && <p className="empty soft">No transcript yet</p>}
             {filteredUtterances.map((utt, idx) => {
-              const isAgent = agentMetrics?.speaker === utt.speaker;
+              const displayLine = transcriptDisplayByKey.get(`${utt.start}-${utt.speaker}`);
+              const isAgent = utteranceIsAgent(
+                utt,
+                speakerMapping,
+                agentMetrics?.speaker,
+                displayLine?.role,
+              );
+              const label = displayLine?.display_name || (isAgent ? agentName : customerName);
               const isActive = currentTime >= utt.start && currentTime < utt.end + 0.05;
               return (
                 <button
@@ -709,7 +968,7 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
                   <div className="transcript-meta">
                     <time>{formatTime(utt.start)}</time>
                     <span className="speaker" style={{ color: isAgent ? AGENT_COLOR : CUSTOMER_COLOR }}>
-                      {isAgent ? agentName : customerName}
+                      {label}
                     </span>
                     <span className="sent-icon" title={utt.sentiment || "NEUTRAL"}>
                       {sentimentEmoji(utt.sentiment)}

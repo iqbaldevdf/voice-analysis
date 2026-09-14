@@ -10,7 +10,12 @@ from pydantic import BaseModel, Field
 
 from app.participant_performance import run_participant_performance
 from app.providers.assemblyai import AssemblyAIProvider
-from app.schemas import CallAnalysisResult, DiarizedUtterance, ParticipantPerformanceAnalysis
+from app.schemas import (
+    CallAnalysisResult,
+    DiarizedUtterance,
+    DiarizedWord,
+    ParticipantPerformanceAnalysis,
+)
 
 load_dotenv()
 
@@ -29,6 +34,16 @@ class ScorePerformanceRequest(BaseModel):
     participants: list[dict] = Field(default_factory=list)
     direction: str | None = None
     call_notes: str | None = None
+
+
+class RemapSpeakersRequest(BaseModel):
+    utterances: list[DiarizedUtterance]
+    words: list[DiarizedWord] = Field(default_factory=list)
+    duration_sec: float
+    transcript_id: str | None = None
+    language: str | None = None
+    participant_context: dict | None = None
+    speaker_override: dict[str, str] | None = None
 
 
 @lru_cache(maxsize=1)
@@ -66,6 +81,28 @@ def score_performance(request: ScorePerformanceRequest) -> list[ParticipantPerfo
             call_notes=request.call_notes,
             chat=provider.llm_gateway_chat if provider.enable_llm else None,
             llm_enabled=provider.enable_llm,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/remap-speakers", response_model=CallAnalysisResult)
+def remap_speakers(request: RemapSpeakersRequest) -> CallAnalysisResult:
+    if not request.utterances:
+        raise HTTPException(status_code=400, detail="utterances are required for remap")
+
+    try:
+        provider = get_provider()
+        return provider.remap_analysis(
+            utterances=request.utterances,
+            words=request.words,
+            duration_sec=request.duration_sec,
+            transcript_id=request.transcript_id,
+            language=request.language or "unknown",
+            participant_context=request.participant_context,
+            speaker_override=request.speaker_override,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

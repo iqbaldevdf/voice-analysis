@@ -14,6 +14,11 @@ function speechRateScore(wordsPerSecond: number | null): number | null {
   return Math.max(0, Math.round((100 - (distance / 0.5) * 25) * 10) / 10);
 }
 
+export function wordsPerMinute(wordsPerSecond: number | null | undefined): number | null {
+  if (wordsPerSecond == null || !Number.isFinite(wordsPerSecond)) return null;
+  return Math.round(wordsPerSecond * 60);
+}
+
 export function wordsPerSecondFromMetrics(agent?: SpeakerMetrics): number | null {
   if (!agent) return null;
   if (agent.talk_time_sec > 0) return Math.round((agent.words_spoken / agent.talk_time_sec) * 10) / 10;

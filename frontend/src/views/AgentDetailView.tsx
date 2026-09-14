@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   analyzeDbRecording,
   fetchAgent,
@@ -10,8 +10,14 @@ import {
   type QuarterWindow,
 } from "../api";
 import { CheckboxField, SearchField, SelectField, TextField } from "../components/ui/Fields";
+import { AgentDetailSkeleton } from "../components/AgentDetailSkeleton";
+import { CallMetricsKpiRow } from "../components/CallMetricsKpiRow";
+import { Skeleton } from "../components/Skeleton";
+import { MetricInfoTip, MetricLabel } from "../components/MetricInfoTip";
+import { metricHelp } from "../lib/metricHelp";
 import { dispositionClass, dispositionLabel } from "../lib/disposition";
 import { agentDisplayName, agentInitials } from "../lib/agentInitials";
+import { wordsPerMinute } from "../lib/callQuality";
 
 type Props = {
   onError: (message: string | null) => void;
@@ -21,21 +27,27 @@ const CATEGORY_LABELS: Record<string, string> = {
   communicationEffectiveness: "Communication",
   responseRelevance: "Relevance",
   activeListening: "Listening",
-  turnTaking: "Turn taking",
   engagement: "Engagement",
   conversationBalance: "Balance",
   efficiency: "Efficiency",
 };
+
+const CATEGORY_SECTIONS = [
+  {
+    title: "Communication skills",
+    items: ["communicationEffectiveness", "responseRelevance", "activeListening"],
+  },
+  {
+    title: "Engagement & outcomes",
+    items: ["engagement", "conversationBalance", "efficiency"],
+  },
+] as const;
 
 function scoreTone(score: number | null | undefined): string {
   if (score == null) return "muted";
   if (score >= 75) return "ok";
   if (score >= 55) return "warn";
   return "danger";
-}
-
-function formatScore(score: number | null | undefined, digits = 1): string {
-  return score == null ? "—" : score.toFixed(digits);
 }
 
 function formatWhen(iso?: string | null): string {
@@ -51,6 +63,7 @@ function formatWhen(iso?: string | null): string {
 export function AgentDetailView({ onError }: Props) {
   const { agentId = "" } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [agent, setAgent] = useState<AgentSummary | null>(null);
   const [summary, setSummary] = useState<AgentDetailSummary | null>(null);
   const [recordings, setRecordings] = useState<AgentRecordingRow[]>([]);
@@ -65,7 +78,7 @@ export function AgentDetailView({ onError }: Props) {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [excludeVoicemail, setExcludeVoicemail] = useState(true);
   const [appointmentOnly, setAppointmentOnly] = useState(false);
-  const [quarterId, setQuarterId] = useState("");
+  const [quarterId, setQuarterId] = useState(searchParams.get("quarter") ?? "");
   const [quarter, setQuarter] = useState<QuarterWindow | null>(null);
   const [availableQuarters, setAvailableQuarters] = useState<QuarterWindow[]>([]);
   const [voicemailMaxSec, setVoicemailMaxSec] = useState(30);
@@ -129,6 +142,16 @@ export function AgentDetailView({ onError }: Props) {
   useEffect(() => {
     void refresh(1).catch((err) => onError(err instanceof Error ? err.message : String(err)));
   }, [agentId, sortBy, sortDir, excludeVoicemail, dateFrom, dateTo, appointmentOnly, quarterId]);
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    const activeQuarter = quarterId || quarter?.id || "";
+    if (activeQuarter) next.set("quarter", activeQuarter);
+    else next.delete("quarter");
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [quarterId, quarter?.id, searchParams, setSearchParams]);
 
   function rowKey(rec: AgentRecordingRow): string {
     return `${rec.callId}-${rec.recordingId}`;
@@ -221,10 +244,14 @@ export function AgentDetailView({ onError }: Props) {
     await analyzeRows([rec]);
   }
 
-  const coverage = summary?.connects
-    ? Math.round((summary.analyzedConnects / summary.connects) * 100)
-    : 0;
-  const categories = Object.entries(summary?.categoryAverages ?? {});
+  const categoryAverages = summary?.categoryAverages ?? {};
+  const hasCategoryScores = CATEGORY_SECTIONS.some((section) =>
+    section.items.some((key) => categoryAverages[key] != null),
+  );
+
+  if (loading && !agent) {
+    return <AgentDetailSkeleton />;
+  }
 
   return (
     <div className="agents-page">
@@ -250,81 +277,68 @@ export function AgentDetailView({ onError }: Props) {
               </option>
             ))}
           </SelectField>
-          <button type="button" className="btn ghost" onClick={() => navigate("/agents")}>
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => {
+              const activeQuarter = quarterId || quarter?.id;
+              navigate(activeQuarter ? `/agents?quarter=${encodeURIComponent(activeQuarter)}` : "/agents");
+            }}
+          >
             All agents
           </button>
         </div>
       </header>
 
-      <section className="kpi-row agent-kpi">
-        <article className="kpi-card">
-          <span>Performance</span>
-          <strong>{formatScore(summary?.averagePerformance)}</strong>
-          <em>
-            {summary?.scoredConnects
-              ? `${summary.scoredConnects} scored connects`
-              : summary?.analyzedConnects
-                ? "Not scored yet. These calls were rate-limited."
-                : "0 scored connects"}
-          </em>
-        </article>
-        <article className="kpi-card">
-          <span>Call quality</span>
-          <strong>{formatScore(summary?.averageCallQuality)}</strong>
-          <em>
-            clarity {formatScore(summary?.averageClarity, 0)} · speech rate {formatScore(summary?.averageSpeechRateScore, 0)}
-          </em>
-        </article>
-        <article className="kpi-card">
-          <span>Calls processed (connects)</span>
-          <strong>{summary?.connects ?? 0}</strong>
-          <em>{summary?.analyzedConnects ?? 0} analyzed</em>
-        </article>
-        <article className="kpi-card">
-          <span>Speech rate</span>
-          <strong>{formatScore(summary?.averageWordsPerSecond)}</strong>
-          <em>words / second</em>
-        </article>
-        <article className="kpi-card">
-          <span>Introduction script</span>
-          <strong>{formatScore(summary?.averageIntroductionScore, 0)}</strong>
-          <em>
-            {summary?.introductionScoredConnects
-              ? `${summary.introductionScoredConnects} scored · opening pitch themes`
-              : "Re-analyze calls for intro score"}
-          </em>
-        </article>
-      </section>
+      <CallMetricsKpiRow
+        overallScore={summary?.averageOverallScore ?? null}
+        talkYou={summary?.averageAgentTalkRatioPct ?? 0}
+        talkCustomer={summary?.averageCustomerTalkRatioPct ?? 0}
+        avgResponseTimeSec={summary?.averageResponseTimeSec ?? null}
+        silenceRatioPct={summary?.averageSilenceRatioPct ?? null}
+        silenceSec={summary?.averageSilenceSec ?? null}
+        interruptions={summary?.averageInterruptions ?? null}
+        speechWordsPerSec={summary?.averageWordsPerSecond ?? null}
+        speechRateScore={summary?.averageSpeechRateScore ?? null}
+        showSpeechRateScore={false}
+        // subtitle={
+        //   summary?.analyzedConnects
+        //     ? `Avg across ${summary.analyzedConnects} analyzed connect${summary.analyzedConnects === 1 ? "" : "s"} · ${summary.analyzedConnects} / ${summary?.connects ?? 0}`
+        //     : "No analyzed connects in this quarter"
+        // }
+        helpScope="quarter"
+      />
 
       <section className="agent-meta-row">
-        <article className="panel agent-span">
-          <h2 className="panel-title">Coverage</h2>
-          <p className="panel-sub">
-            {quarter?.label ?? "Quarter"} analyzed connects · first call {formatWhen(agent?.firstCallAt)}
-          </p>
-          <div className="agent-coverage">
-            <span>Analyzed</span>
-            <strong>{coverage}%</strong>
-          </div>
-          <div className="perf-bar">
-            <i style={{ width: `${coverage}%` }} />
-          </div>
-        </article>
-        <article className="panel">
-          <h2 className="panel-title">Category averages</h2>
+        <article className="panel category-breakup-panel">
+          <h2 className="panel-title panel-title-with-info">
+            Category break-up
+            <MetricInfoTip text={metricHelp("categoryBreakup")} />
+          </h2>
           <p className="panel-sub">{quarter?.label ?? "Current quarter"}</p>
-          {categories.length === 0 ? (
+          {!hasCategoryScores ? (
             <p className="empty soft">Scores appear after a call is analyzed.</p>
           ) : (
-            <div className="agent-categories">
-              {categories.map(([key, score]) => (
-                <div key={key}>
-                  <div className="perf-score-label">
-                    <span>{CATEGORY_LABELS[key] ?? key}</span>
-                    <strong>{score.toFixed(0)}</strong>
-                  </div>
-                  <div className="perf-bar">
-                    <i style={{ width: `${Math.min(100, score)}%` }} />
+            <div className="category-breakup-grid">
+              {CATEGORY_SECTIONS.map((section) => (
+                <div key={section.title} className="category-breakup-group">
+                  <h3 className="category-breakup-heading">{section.title}</h3>
+                  <div className="agent-categories">
+                    {section.items.map((key) => {
+                      const score = categoryAverages[key];
+                      if (score == null) return null;
+                      return (
+                        <div key={key}>
+                          <div className="perf-score-label">
+                            <MetricLabel help={metricHelp(key)}>{CATEGORY_LABELS[key] ?? key}</MetricLabel>
+                            <strong>{score.toFixed(0)}</strong>
+                          </div>
+                          <div className="perf-bar">
+                            <i style={{ width: `${Math.min(100, score)}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
@@ -412,31 +426,20 @@ export function AgentDetailView({ onError }: Props) {
         </div>
       </form>
 
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <h2 className="panel-title">Recordings</h2>
-          </div>
-          <div className="viewport-actions">
-            <button
-              type="button"
-              className="btn primary compact"
-              disabled={selectedIds.length === 0}
-              onClick={() => {
-                const chosen = recordings.filter((rec) => selectedIds.includes(rowKey(rec)));
-                void analyzeRows(chosen);
-              }}
-            >
-              Analyze selected{selectedIds.length > 0 ? ` (${selectedIds.length})` : ""}
-            </button>
-            <span className="muted-inline">
-              {total} result{total === 1 ? "" : "s"} · page {page} of {totalPages}
-            </span>
-          </div>
-        </div>
-        {batchNotice ? <p className="panel-sub">{batchNotice}</p> : null}
-        <div className="list-meta-row">
-          <span />
+      <section className="panel recordings-table-panel agent-recordings-panel">
+        <h2 className="panel-title recordings-title">Recordings</h2>
+        <div className="recordings-actions-bar">
+          <button
+            type="button"
+            className="btn primary compact"
+            disabled={selectedIds.length === 0}
+            onClick={() => {
+              const chosen = recordings.filter((rec) => selectedIds.includes(rowKey(rec)));
+              void analyzeRows(chosen);
+            }}
+          >
+            Analyze selected{selectedIds.length > 0 ? ` (${selectedIds.length})` : ""}
+          </button>
           <div className="sort-controls">
             <SelectField
               id="agent-sort-by"
@@ -460,7 +463,8 @@ export function AgentDetailView({ onError }: Props) {
             </SelectField>
           </div>
         </div>
-        <div className="table-wrap">
+        {batchNotice ? <p className="panel-sub recordings-notice">{batchNotice}</p> : null}
+        <div className="table-wrap recordings-table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -495,19 +499,37 @@ export function AgentDetailView({ onError }: Props) {
                 <th>Speech rate</th>
                 <th>Disposition</th>
                 <th>Status</th>
-                <th>Intro</th>
                 <th>Call score</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr>
-                  <td colSpan={13} className="empty soft">Loading recordings…</td>
-                </tr>
+                Array.from({ length: 6 }, (_, index) => (
+                  <tr key={`skeleton-${index}`} className="skeleton-row">
+                    <td><Skeleton width={16} height={16} /></td>
+                    <td><Skeleton width="72%" height={14} /></td>
+                    <td>
+                      <Skeleton width="80%" height={14} />
+                      <Skeleton width="55%" height={12} className="skeleton-mt" />
+                    </td>
+                    <td><Skeleton width={72} height={22} /></td>
+                    <td><Skeleton width={56} height={14} /></td>
+                    <td><Skeleton width={48} height={14} /></td>
+                    <td>
+                      <Skeleton width={40} height={14} />
+                      <Skeleton width={64} height={12} className="skeleton-mt" />
+                    </td>
+                    <td><Skeleton width={52} height={14} /></td>
+                    <td><Skeleton width={68} height={22} /></td>
+                    <td><Skeleton width={72} height={22} /></td>
+                    <td><Skeleton width={36} height={22} /></td>
+                    <td><Skeleton width={64} height={30} /></td>
+                  </tr>
+                ))
               ) : recordings.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="empty soft">No recordings match these filters.</td>
+                  <td colSpan={12} className="empty soft">No recordings match these filters.</td>
                 </tr>
               ) : (
                 recordings.map((rec) => (
@@ -536,7 +558,6 @@ export function AgentDetailView({ onError }: Props) {
                           ? formatWhen(rec.createdTime)
                           : rec.callDate || "—"}
                       </button>
-                      <div className="muted-inline">FC-{rec.callId}</div>
                     </td>
                     <td>
                       <strong>{rec.customerName || "Customer"}</strong>
@@ -555,7 +576,11 @@ export function AgentDetailView({ onError }: Props) {
                         <div className="muted-inline">{rec.interruptionCount} interruptions</div>
                       ) : null}
                     </td>
-                    <td>{rec.wordsPerSecond != null ? `${rec.wordsPerSecond.toFixed(1)} w/s` : "—"}</td>
+                    <td>
+                      {rec.wordsPerSecond != null
+                        ? `${wordsPerMinute(rec.wordsPerSecond) ?? "—"} wpm`
+                        : "—"}
+                    </td>
                     <td>
                       {rec.disposition ? (
                         <span className={dispositionClass(rec.disposition)}>{dispositionLabel(rec.disposition)}</span>
@@ -581,15 +606,6 @@ export function AgentDetailView({ onError }: Props) {
                               ? "Analyzing"
                               : "Needs analysis"}
                       </span>
-                    </td>
-                    <td>
-                      {rec.introductionScore != null ? (
-                        <span className={`badge ${scoreTone(rec.introductionScore)}`} title={rec.introductionRank ?? undefined}>
-                          {rec.introductionScore.toFixed(0)}
-                        </span>
-                      ) : (
-                        <span className="muted-inline">—</span>
-                      )}
                     </td>
                     <td>
                       <span className={`badge ${scoreTone(rec.callQualityScore ?? rec.overallScore)}`}>
@@ -620,27 +636,32 @@ export function AgentDetailView({ onError }: Props) {
             </tbody>
           </table>
         </div>
-        <div className="filter-panel-footer">
-          <button
-            type="button"
-            className="btn ghost"
-            disabled={page <= 1}
-            onClick={() =>
-              void refresh(page - 1).catch((err) => onError(err instanceof Error ? err.message : String(err)))
-            }
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            className="btn ghost"
-            disabled={page >= totalPages}
-            onClick={() =>
-              void refresh(page + 1).catch((err) => onError(err instanceof Error ? err.message : String(err)))
-            }
-          >
-            Next
-          </button>
+        <div className="recordings-footer filter-panel-footer">
+          <span className="muted-inline">
+            {total} result{total === 1 ? "" : "s"} · page {page} of {totalPages}
+          </span>
+          <div className="recordings-pagination">
+            <button
+              type="button"
+              className="btn ghost compact"
+              disabled={page <= 1}
+              onClick={() =>
+                void refresh(page - 1).catch((err) => onError(err instanceof Error ? err.message : String(err)))
+              }
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              className="btn ghost compact"
+              disabled={page >= totalPages}
+              onClick={() =>
+                void refresh(page + 1).catch((err) => onError(err instanceof Error ? err.message : String(err)))
+              }
+            >
+              Next
+            </button>
+          </div>
         </div>
       </section>
     </div>

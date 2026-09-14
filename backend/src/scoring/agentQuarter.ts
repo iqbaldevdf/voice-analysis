@@ -44,8 +44,27 @@ type AnalysisShape = {
     role_guess?: string | null;
     words_spoken?: number;
     talk_time_sec?: number;
+    talk_ratio_pct?: number;
     words_per_minute?: number;
   }>;
+  call_quality?: {
+    avg_response_time_sec?: number;
+    silence_ratio_pct?: number;
+    silence_sec?: number;
+    interruptions_count?: number;
+  };
+};
+
+export type CallMetricsSnapshot = {
+  overallScore: number | null;
+  agentTalkRatioPct: number | null;
+  customerTalkRatioPct: number | null;
+  avgResponseTimeSec: number | null;
+  silenceRatioPct: number | null;
+  silenceSec: number | null;
+  interruptionsCount: number | null;
+  wordsPerSecond: number | null;
+  speechRateScore: number | null;
 };
 
 export type CallQualityParts = {
@@ -174,6 +193,29 @@ type IntroductionShape = {
   rank?: string;
 };
 
+export function callMetricsFromResult(result: unknown): CallMetricsSnapshot {
+  const quality = callQualityFromResult(result);
+  const metrics = (result as AnalysisShape | null)?.speaker_metrics ?? [];
+  const agent = metrics.find((item) => item.role_guess === "agent");
+  const customer = metrics.find((item) => item.role_guess === "customer");
+  const callQuality = (result as AnalysisShape | null)?.call_quality;
+  const agentTalk = finiteScore(agent?.talk_ratio_pct);
+  const customerTalk = finiteScore(customer?.talk_ratio_pct);
+
+  return {
+    overallScore: quality.callQualityScore,
+    agentTalkRatioPct: agentTalk,
+    customerTalkRatioPct:
+      customerTalk ?? (agentTalk != null ? Math.max(0, Math.round((100 - agentTalk) * 10) / 10) : null),
+    avgResponseTimeSec: finiteScore(callQuality?.avg_response_time_sec),
+    silenceRatioPct: finiteScore(callQuality?.silence_ratio_pct),
+    silenceSec: finiteScore(callQuality?.silence_sec),
+    interruptionsCount: finiteScore(callQuality?.interruptions_count),
+    wordsPerSecond: quality.wordsPerSecond,
+    speechRateScore: quality.speechRateScore,
+  };
+}
+
 export function introductionScriptFromResult(result: unknown): IntroductionShape | null {
   const intro = (result as { introduction_script?: IntroductionShape } | null)?.introduction_script;
   if (!intro || typeof intro.score !== "number") return null;
@@ -190,4 +232,42 @@ export function recordingCallDate(doc: { callDate?: string | null; createdTime?:
 
 export function inQuarter(callDate: string | null, quarter: QuarterWindow): boolean {
   return callDate != null && callDate >= quarter.fromDate && callDate <= quarter.toDate;
+}
+
+export type RecordingQuarterInput = {
+  callDate?: string | null;
+  createdTime?: string | null;
+  analysisStatus?: string;
+  analysisResult?: unknown;
+  disposition?: string | null;
+  isConnected?: boolean;
+  isVoicemail?: boolean;
+  callNotes?: string | null;
+};
+
+export function summarizeAgentQuarterStats(
+  recordings: RecordingQuarterInput[],
+  quarter: QuarterWindow,
+  isConnected: (doc: RecordingQuarterInput) => boolean,
+  isForwardedMail: (doc: RecordingQuarterInput) => boolean,
+): {
+  connects: number;
+  analyzedCount: number;
+  averageScore: number | null;
+  appointmentCount: number;
+} {
+  const inQuarterDocs = recordings.filter(
+    (doc) => inQuarter(recordingCallDate(doc), quarter) && !isForwardedMail(doc),
+  );
+  const connected = inQuarterDocs.filter((doc) => isConnected(doc));
+  const callMetrics = connected
+    .filter((doc) => doc.analysisStatus === "completed")
+    .map((doc) => callMetricsFromResult(doc.analysisResult));
+
+  return {
+    connects: connected.length,
+    analyzedCount: connected.filter((doc) => doc.analysisStatus === "completed").length,
+    averageScore: mean(callMetrics.map((row) => row.overallScore)),
+    appointmentCount: connected.filter((doc) => doc.disposition === "appointment").length,
+  };
 }

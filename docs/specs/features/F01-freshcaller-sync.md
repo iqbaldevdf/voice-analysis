@@ -19,7 +19,8 @@ As ops, I need calls from Freshcaller imported daily so reviewers can analyze th
 
 `export` → `poll` → `zip` → `index` → `download` → `complete`
 
-- Parse `calls_*.json` from ZIP.
+- If bulk export fails (`unexpected_job_error` etc.), **fallback**: paginated `GET /api/v1/calls?by_time[from|to]` for the same IST day, then continue `index` → `download` → `complete`.
+- Parse `calls_*.json` from ZIP (export path) or list API (fallback).
 - Index all calls with `recording.url`.
 - Classify connect vs voicemail (F06).
 - Download audio only for non-voicemail connects.
@@ -44,4 +45,4 @@ As ops, I need calls from Freshcaller imported daily so reviewers can analyze th
 
 ## Open items
 
-- None.
+- Bulk export reliability depends on Freshcaller; list API fallback is best-effort when export jobs error.

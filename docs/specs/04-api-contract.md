@@ -18,7 +18,7 @@ Prefix: **`/recordings/db`**
 | GET | `/` | Full list from `recordings` collection |
 | GET | `/:callId` | Detail + `analysisResult` |
 | GET | `/:callId/audio` | Stream local audio |
-| POST | `/:callId/analyze` | Run analysis once |
+| POST | `/:callId/analyze` | Run analysis; body `{ recordingId?, force?, remapOnly?, swapSpeakers?, speakerOverride?, correctionReason? }` |
 | PATCH | `/:callId` | Set/clear `disposition` |
 
 ### List query params (`/listings`)

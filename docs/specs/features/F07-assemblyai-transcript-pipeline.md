@@ -1,6 +1,6 @@
 # F07 — AssemblyAI transcript pipeline (speaker-aware)
 
-**Status:** Draft  
+**Status:** Partial  
 **Owner:** AI service (+ backend context pass-through)  
 **Related:** [F01](./F01-freshcaller-sync.md), [F02](./F02-call-analysis.md), [02-architecture.md](../02-architecture.md), [03-data-model.md](../03-data-model.md)
 
@@ -130,6 +130,9 @@ Dedicated step: `map_speakers(utterances, freshcaller_context) → SpeakerMappin
 | Direction | Outgoing: first substantive speaker often agent; incoming: first answer often customer |
 | Name match | Agent name / company name in early turns |
 | Scripted opener | Datafortune intro phrases (reuse F07 / intro theme phrases) |
+| Calling from company | "calling you from …" → agent |
+| Greets customer by name | "Hi Jaydon, …" → agent (fuzzy first-name match) |
+| Call screening | Automated "record your name / reason for calling" prompts excluded from heuristics |
 | LLM confirmation | Optional small Gateway call **only** for mapping when confidence &lt; threshold |
 
 **Rules:**
@@ -217,14 +220,14 @@ Add to `recording.analysisResult` (summary; full shape in `03-data-model.md` whe
 
 ## Acceptance criteria
 
-- [ ] AC1: Pipeline stages are separate functions; `analyze()` orchestrates in documented order.
-- [ ] AC2: `participant_context` from Freshcaller influences speaker mapping (direction + agent name at minimum).
-- [ ] AC3: LLM Gateway prompts use `agent` / `customer`, not raw diarization ids.
-- [ ] AC4: `speaker_mapping` persisted in `analysisResult` with confidence and method.
-- [ ] AC5: Call detail transcript shows role-aware labels (Agent / Customer or names).
-- [ ] AC6: Introduction script and performance use mapped agent speaker, not talk-time-only guess.
-- [ ] AC7: Low-confidence mapping shows a visible note on call detail (no silent wrong attribution).
-- [ ] AC8: Re-analyze existing calls produces new mapping fields; STT can be skipped when `transcript_id` + utterances cached (optional).
+- [x] AC1: Pipeline stages are separate functions; `analyze()` orchestrates in documented order.
+- [x] AC2: `participant_context` from Freshcaller influences speaker mapping (direction + agent name at minimum).
+- [x] AC3: LLM Gateway prompts use `agent` / `customer`, not raw diarization ids.
+- [x] AC4: `speaker_mapping` persisted in `analysisResult` with confidence and method.
+- [x] AC5: Call detail transcript shows role-aware labels (Agent / Customer or names).
+- [x] AC6: Introduction script and performance use mapped agent speaker, not talk-time-only guess.
+- [x] AC7: Low-confidence mapping shows a visible note on call detail (no silent wrong attribution).
+- [x] AC8: Re-analyze existing calls produces new mapping fields; STT can be skipped when `transcript_id` + utterances cached (`POST /remap-speakers`, `remapOnly` on analyze).
 
 ---
 
@@ -272,7 +275,7 @@ Add to `recording.analysisResult` (summary; full shape in `03-data-model.md` whe
 | Method | Path | Change |
 | --- | --- | --- |
 | POST | `/analyze` | Response includes `speaker_mapping`, optional `transcript_display` |
-| POST | `/remap-speakers` | **(Optional)** Re-run mapping + LLM on stored utterances |
+| POST | `/remap-speakers` | Re-run mapping + LLM on stored utterances; optional `speaker_override` |
 | GET | `/health` | Report pipeline version / mapping module enabled |
 
 Backend `POST` analyze flow unchanged; only richer `participant_context` if needed.
@@ -327,3 +330,4 @@ Backend `POST` analyze flow unchanged; only richer `participant_context` if need
 | Date | Change |
 | --- | --- |
 | 2026-09-09 | Initial draft — pipeline plan for discussion |
+| 2026-09-10 | Phase 2–3 implemented: speaker_mapping, transcript_builder, LLM role prompts, UI note |

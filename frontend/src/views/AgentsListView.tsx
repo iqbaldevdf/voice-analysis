@@ -1,17 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { fetchAgents, type AgentSummary } from "../api";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { fetchAgents, type AgentSummary, type QuarterWindow } from "../api";
 import { agentDisplayName, agentInitials } from "../lib/agentInitials";
-import { SearchField } from "../components/ui/Fields";
+import { MetricLabel } from "../components/MetricInfoTip";
+import { SearchField, SelectField } from "../components/ui/Fields";
+import { metricHelp } from "../lib/metricHelp";
 
 type Props = {
   onError: (message: string | null) => void;
 };
-
-function coverage(agent: AgentSummary): number {
-  if (!agent.recordingCount) return 0;
-  return Math.round((agent.analyzedCount / agent.recordingCount) * 100);
-}
 
 function scoreTone(score: number | null): string {
   if (score == null) return "muted";
@@ -20,31 +17,29 @@ function scoreTone(score: number | null): string {
   return "danger";
 }
 
-function formatWhen(iso?: string | null): string {
-  if (!iso) return "No calls yet";
-  return new Date(iso).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 export function AgentsListView({ onError }: Props) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [agents, setAgents] = useState<AgentSummary[]>([]);
-  const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [quarterId, setQuarterId] = useState(searchParams.get("quarter") ?? "");
+  const [quarter, setQuarter] = useState<QuarterWindow | null>(null);
+  const [availableQuarters, setAvailableQuarters] = useState<QuarterWindow[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    void fetchAgents({ q: query || undefined, limit: 50 })
+    void fetchAgents({ q: query || undefined, limit: 50, quarter: quarterId || undefined })
       .then((data) => {
         if (!cancelled) {
           setAgents(data.agents);
-          setTotal(data.total);
+          setQuarter(data.quarter);
+          setAvailableQuarters(data.availableQuarters ?? []);
+          const resolvedQuarter = data.quarter?.id ?? "";
+          if (resolvedQuarter && resolvedQuarter !== quarterId) {
+            setQuarterId(resolvedQuarter);
+          }
           setLoading(false);
         }
       })
@@ -57,42 +52,87 @@ export function AgentsListView({ onError }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [query, onError]);
+  }, [query, quarterId, onError]);
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    const activeQuarter = quarterId || quarter?.id || "";
+    if (activeQuarter) next.set("quarter", activeQuarter);
+    else next.delete("quarter");
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [quarterId, quarter?.id, searchParams, setSearchParams]);
 
   const roster = useMemo(() => {
-    const recordings = agents.reduce((sum, agent) => sum + agent.recordingCount, 0);
+    const connects = agents.reduce((sum, agent) => sum + agent.recordingCount, 0);
     const analyzed = agents.reduce((sum, agent) => sum + agent.analyzedCount, 0);
+    const appointments = agents.reduce((sum, agent) => sum + (agent.appointmentCount ?? 0), 0);
     const scored = agents.filter((agent) => agent.averageScore != null);
     const average =
       scored.length > 0
         ? scored.reduce((sum, agent) => sum + (agent.averageScore ?? 0), 0) / scored.length
         : null;
-    return { recordings, analyzed, average };
+    return { connects, analyzed, appointments, average };
   }, [agents]);
+
+  function openAgent(agentId: string) {
+    const activeQuarter = quarterId || quarter?.id;
+    navigate(
+      activeQuarter
+        ? `/agents/${encodeURIComponent(agentId)}?quarter=${encodeURIComponent(activeQuarter)}`
+        : `/agents/${encodeURIComponent(agentId)}`,
+    );
+  }
 
   return (
     <div className="agents-page">
       <header className="viewport-header">
         <div>
           <h1>Agents</h1>
+          <p className="panel-sub">{quarter?.label ?? "Current quarter"}</p>
+        </div>
+        <div className="viewport-actions">
+          <SelectField
+            id="agents-quarter"
+            className="agent-quarter"
+            label="Quarter"
+            value={quarter?.id ?? quarterId}
+            onChange={(e) => setQuarterId(e.target.value)}
+          >
+            {(availableQuarters.length > 0 ? availableQuarters : quarter ? [quarter] : []).map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </SelectField>
         </div>
       </header>
 
       <section className="kpi-row agent-kpi">
         <article className="kpi-card">
-          <span>Agents on roster</span>
-          <strong>{total}</strong>
-          <em>Customers are excluded</em>
+          <MetricLabel layout="corner" help={metricHelp("overallCalls")}>Total calls</MetricLabel>
+          <strong>{roster.connects}</strong>
+          <em>Connects in {quarter?.label ?? "quarter"}</em>
         </article>
         <article className="kpi-card">
-          <span>Recordings held</span>
-          <strong>{roster.recordings}</strong>
-          <em>{roster.analyzed} analyzed</em>
+          <MetricLabel layout="corner" help={metricHelp("callsAnalyzed")}>Calls analyzed</MetricLabel>
+          <strong>{roster.analyzed} / {roster.connects}</strong>
+          <em>
+            {roster.connects > 0
+              ? `${Math.round((roster.analyzed / roster.connects) * 100)}% analyzed`
+              : "No connects in this quarter"}
+          </em>
         </article>
         <article className="kpi-card">
-          <span>Average performance</span>
-          <strong>{roster.average != null ? roster.average.toFixed(1) : "—"}</strong>
-          <em>Across agents with scores</em>
+          <MetricLabel layout="corner" help={metricHelp("rosterOverallScore")}>Overall score</MetricLabel>
+          <strong>{roster.average != null ? roster.average.toFixed(0) : "—"}</strong>
+          <em>Average across agents with scores</em>
+        </article>
+        <article className="kpi-card">
+          <MetricLabel layout="corner" help={metricHelp("appointments")}>Appointments</MetricLabel>
+          <strong>{roster.appointments}</strong>
+          <em>Disposition = Appointment</em>
         </article>
       </section>
 
@@ -113,54 +153,61 @@ export function AgentsListView({ onError }: Props) {
           <p>Agents appear when a recording is synced with an assigned agent name.</p>
         </div>
       ) : (
-        <section className="agent-roster">
-          {agents.map((agent) => {
-            const covered = coverage(agent);
-            const pending = Math.max(0, agent.recordingCount - agent.analyzedCount);
-            return (
-              <button
-                key={agent.agentId}
-                type="button"
-                className="agent-card"
-                onClick={() => navigate(`/agents/${encodeURIComponent(agent.agentId)}`)}
-              >
-                <div className="agent-card-top">
-                  <span className="avatar agent">{agentInitials(agent.name)}</span>
-                  <div className="agent-identity">
-                    <strong>{agentDisplayName(agent.name)}</strong>
-                    <span>{agent.teamName || "No team assigned"}</span>
-                  </div>
-                  <span className={`badge ${scoreTone(agent.averageScore)}`}>
-                    {agent.averageScore != null ? agent.averageScore.toFixed(0) : "No score"}
-                  </span>
-                </div>
-
-                <dl className="agent-card-stats">
-                  <div>
-                    <dt>Calls</dt>
-                    <dd>{agent.callCount}</dd>
-                  </div>
-                  <div>
-                    <dt>Recordings</dt>
-                    <dd>{agent.recordingCount}</dd>
-                  </div>
-                  <div>
-                    <dt>Pending</dt>
-                    <dd>{pending}</dd>
-                  </div>
-                </dl>
-
-                <div className="agent-coverage">
-                  <span>Analysis coverage</span>
-                  <strong>{covered}%</strong>
-                </div>
-                <div className="perf-bar" aria-hidden>
-                  <i style={{ width: `${covered}%` }} />
-                </div>
-                <p className="agent-card-foot">Last call {formatWhen(agent.lastCallAt)}</p>
-              </button>
-            );
-          })}
+        <section className="panel agents-table-panel">
+          <div className="table-wrap">
+            <table className="data-table agents-table">
+              <thead>
+                <tr>
+                  <th>Agent</th>
+                  <th>
+                    <MetricLabel help={metricHelp("agentCallsAnalyzed")}>Calls analyzed</MetricLabel>
+                  </th>
+                  <th>
+                    <MetricLabel help={metricHelp("agentOverallScore")}>Overall score</MetricLabel>
+                  </th>
+                  <th>
+                    <MetricLabel help={metricHelp("agentAppointments")}>Appointments</MetricLabel>
+                  </th>
+                  <th aria-hidden />
+                </tr>
+              </thead>
+              <tbody>
+                {agents.map((agent) => (
+                  <tr key={agent.agentId}>
+                    <td>
+                      <div className="agents-table-agent">
+                        <span className="avatar agent sm">{agentInitials(agent.name)}</span>
+                        <strong>{agentDisplayName(agent.name)}</strong>
+                      </div>
+                    </td>
+                    <td>
+                      {agent.analyzedCount} / {agent.recordingCount}
+                    </td>
+                    <td>
+                      <span className={`badge ${scoreTone(agent.averageScore)}`}>
+                        {agent.averageScore != null ? agent.averageScore.toFixed(0) : "—"}
+                      </span>
+                    </td>
+                    <td>{agent.appointmentCount ?? 0}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn primary compact"
+                        onClick={() => openAgent(agent.agentId)}
+                      >
+                        Open
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="agents-table-footer">
+            <span className="muted-inline">
+              {agents.length} agent{agents.length === 1 ? "" : "s"} · {quarter?.label ?? "Current quarter"}
+            </span>
+          </div>
         </section>
       )}
     </div>

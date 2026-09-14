@@ -9,7 +9,10 @@
     "build": "tsc -p tsconfig.json",
     "import:recordings": "tsx scripts/import-recordings.ts",
     "sync:daily": "tsx scripts/run-daily-sync.ts",
-    "check:mongo": "tsx scripts/check-mongo.ts"
+    "check:mongo": "tsx scripts/check-mongo.ts",
+    "clear:analysis": "tsx scripts/clear-analysis-data.ts",
+    "reset:db": "tsx scripts/reset-database.ts",
+    "reanalyze": "tsx scripts/reanalyze-recording.ts"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

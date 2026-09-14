@@ -7,6 +7,11 @@ import { recordingsCollection, type RecordingDocument } from "../db/mongo.js";
 import { upsertRecordingListing } from "../db/recordingListings.js";
 import { normalizeInWorker } from "../audioPool.js";
 import { isLikelyVoicemail, VOICEMAIL_MAX_DURATION_SEC } from "../voicemail.js";
+import {
+  resolveSpeakerOverride,
+  storedAnalysisForRemap,
+} from "./speakerRemap.js";
+import type { AnalysisCorrection } from "../db/mongo.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,20 +39,25 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+function participantContext(doc: RecordingDocument) {
+  return {
+    direction: doc.direction,
+    callNotes: doc.callNotes,
+    agentName: doc.agentName,
+    participants: (doc.participants ?? []).map((p) => ({
+      role: p.role,
+      name: p.name,
+    })),
+  };
+}
+
 async function callAiService(normalizedPath: string, doc: RecordingDocument) {
   const response = await fetch(`${AI_SERVICE_URL}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       audio_path: normalizedPath,
-      participant_context: {
-        direction: doc.direction,
-        callNotes: doc.callNotes,
-        participants: (doc.participants ?? []).map((p) => ({
-          role: p.role,
-          name: p.name,
-        })),
-      },
+      participant_context: participantContext(doc),
     }),
   });
 
@@ -58,6 +68,41 @@ async function callAiService(normalizedPath: string, doc: RecordingDocument) {
 
   return response.json();
 }
+
+async function callAiRemapService(
+  doc: RecordingDocument,
+  stored: NonNullable<ReturnType<typeof storedAnalysisForRemap>>,
+  speakerOverride?: Record<string, string>,
+) {
+  const response = await fetch(`${AI_SERVICE_URL}/remap-speakers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      utterances: stored.utterances,
+      words: stored.words,
+      duration_sec: stored.duration_sec,
+      transcript_id: stored.transcript_id,
+      language: stored.language,
+      participant_context: participantContext(doc),
+      speaker_override: speakerOverride,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`AI remap failed (${response.status}): ${body}`);
+  }
+
+  return response.json();
+}
+
+export type AnalyzeRecordingOptions = {
+  force?: boolean;
+  remapOnly?: boolean;
+  swapSpeakers?: boolean;
+  speakerOverride?: Record<string, string>;
+  correctionReason?: string;
+};
 
 export async function findRecordingDoc(
   callId: number,
@@ -111,6 +156,7 @@ async function ensureLocalAudio(doc: RecordingDocument): Promise<{
 export async function analyzeRecordingOnce(
   callId: number,
   recordingId?: number,
+  options?: AnalyzeRecordingOptions,
 ): Promise<{
   recording: RecordingDocument;
   reused: boolean;
@@ -132,7 +178,10 @@ export async function analyzeRecordingOnce(
     );
   }
 
-  if (doc.analysisStatus === "completed" && doc.analysisResult) {
+  const remapOnly = Boolean(options?.remapOnly);
+  const force = Boolean(options?.force) || remapOnly;
+
+  if (!force && doc.analysisStatus === "completed" && doc.analysisResult) {
     await upsertRecordingListing(doc);
     return { recording: doc, reused: true };
   }
@@ -160,34 +209,98 @@ export async function analyzeRecordingOnce(
   );
 
   try {
-    const audio = await ensureLocalAudio(doc);
-    await fs.mkdir(NORMALIZED_DIR, { recursive: true });
-    const outputPath = path.join(
-      NORMALIZED_DIR,
-      `fc_${doc.callId}_${doc.recordingId}.wav`,
-    );
+    let analysisResult: unknown;
+    let localPath = doc.localPath ?? null;
+    let localFileName = doc.localFileName ?? null;
+    let durationSec = doc.durationSec ?? null;
 
-    const normalized = await normalizeInWorker({
-      inputPath: audio.localPath,
-      outputPath,
-    });
+    if (remapOnly) {
+      const stored = storedAnalysisForRemap(doc.analysisResult);
+      if (!stored) {
+        throw Object.assign(
+          new Error(
+            "Remap-only requires a completed analysis with stored utterances. Run full analyze first.",
+          ),
+          { status: 422 },
+        );
+      }
 
-    const analysisResult = await callAiService(normalized.outputPath, doc);
+      const existingMapping = (doc.analysisResult as { speaker_mapping?: unknown } | undefined)
+        ?.speaker_mapping as { mapping?: Record<string, string> } | undefined;
+      const speakerOverride = resolveSpeakerOverride(existingMapping, {
+        swapSpeakers: options?.swapSpeakers,
+        speakerOverride: options?.speakerOverride,
+      });
+
+      analysisResult = await callAiRemapService(
+        doc,
+        stored,
+        speakerOverride && Object.keys(speakerOverride).length > 0
+          ? speakerOverride
+          : undefined,
+      );
+    } else {
+      const audio = await ensureLocalAudio(doc);
+      localPath = audio.localPath;
+      localFileName = audio.localFileName;
+      await fs.mkdir(NORMALIZED_DIR, { recursive: true });
+      const outputPath = path.join(
+        NORMALIZED_DIR,
+        `fc_${doc.callId}_${doc.recordingId}.wav`,
+      );
+
+      const normalized = await normalizeInWorker({
+        inputPath: audio.localPath,
+        outputPath,
+      });
+
+      analysisResult = await callAiService(normalized.outputPath, doc);
+      durationSec = doc.durationSec ?? normalized.durationSec;
+    }
+
     const now = new Date();
+    const resolvedOverride = remapOnly
+      ? resolveSpeakerOverride(
+          (doc.analysisResult as { speaker_mapping?: { mapping?: Record<string, string> } } | undefined)
+            ?.speaker_mapping,
+          {
+            swapSpeakers: options?.swapSpeakers,
+            speakerOverride: options?.speakerOverride,
+          },
+        )
+      : undefined;
+
+    const correction: AnalysisCorrection | null = remapOnly
+      ? {
+          at: now,
+          reason:
+            options?.correctionReason ??
+            (options?.swapSpeakers
+              ? "speakers_swapped"
+              : resolvedOverride
+                ? "manual_override"
+                : "remap_heuristics"),
+          remapOnly: true,
+          ...(resolvedOverride ? { speakerOverride: resolvedOverride } : {}),
+        }
+      : null;
+
+    const update: Record<string, unknown> = {
+      analysisStatus: "completed",
+      analysisResult,
+      analyzedAt: now,
+      analysisError: null,
+      updatedAt: now,
+    };
+    if (localPath) update.localPath = localPath;
+    if (localFileName) update.localFileName = localFileName;
+    if (durationSec != null) update.durationSec = durationSec;
 
     await collection.updateOne(
       { callId: doc.callId, recordingId: doc.recordingId },
       {
-        $set: {
-          localPath: audio.localPath,
-          localFileName: audio.localFileName,
-          analysisStatus: "completed",
-          analysisResult,
-          analyzedAt: now,
-          analysisError: null,
-          durationSec: doc.durationSec ?? normalized.durationSec,
-          updatedAt: now,
-        },
+        $set: update,
+        ...(correction ? { $push: { analysisCorrections: correction } } : {}),
       },
     );
 

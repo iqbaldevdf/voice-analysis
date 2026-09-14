@@ -345,7 +345,23 @@ export function createDbRecordingsRouter(): Router {
     res.setTimeout(20 * 60 * 1000);
 
     try {
-      const { recording, reused } = await analyzeRecordingOnce(callId, recordingId);
+      const force = req.body?.force === true || req.query.force === "true";
+      const remapOnly = req.body?.remapOnly === true || req.query.remapOnly === "true";
+      const swapSpeakers = req.body?.swapSpeakers === true || req.query.swapSpeakers === "true";
+      const speakerOverride =
+        req.body?.speakerOverride && typeof req.body.speakerOverride === "object"
+          ? (req.body.speakerOverride as Record<string, string>)
+          : undefined;
+      const correctionReason =
+        typeof req.body?.correctionReason === "string" ? req.body.correctionReason.trim() : undefined;
+
+      const { recording, reused } = await analyzeRecordingOnce(callId, recordingId, {
+        force,
+        remapOnly,
+        swapSpeakers,
+        speakerOverride,
+        correctionReason,
+      });
       await upsertRecordingListing(recording);
       res.status(reused ? 200 : 201).json({
         reused,
