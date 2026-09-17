@@ -1,0 +1,74 @@
+[
+  {
+    "speaker": "A",
+    "start": 0.08,
+    "end": 5.52,
+    "text": ""
+  },
+  {
+    "speaker": "B",
+    "start": 5.52,
+    "end": 6,
+    "text": ""
+  },
+  {
+    "speaker": "A",
+    "start": 11.28,
+    "end": 13.76,
+    "text": ""
+  },
+  {
+    "speaker": "B",
+    "start": 22.56,
+    "end": 28.97,
+    "text": ""
+  },
+  {
+    "speaker": "C",
+    "start": 30.81,
+    "end": 31.85,
+    "text": ""
+  },
+  {
+    "speaker": "B",
+    "start": 32.89,
+    "end": 39.45,
+    "text": ""
+  },
+  {
+    "speaker": "C",
+    "start": 40.57,
+    "end": 43.61,
+    "text": ""
+  },
+  {
+    "speaker": "B",
+    "start": 46.09,
+    "end": 46.73,
+    "text": ""
+  },
+  {
+    "speaker": "C",
+    "start": 47.13,
+    "end": 51.85,
+    "text": ""
+  },
+  {
+    "speaker": "B",
+    "start": 52.78,
+    "end": 58.06,
+    "text": ""
+  },
+  {
+    "speaker": "C",
+    "start": 61.42,
+    "end": 64.22,
+    "text": ""
+  },
+  {
+    "speaker": "B",
+    "start": 64.46,
+    "end": 66.7,
+    "text": ""
+  }
+]

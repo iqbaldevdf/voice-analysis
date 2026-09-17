@@ -8,7 +8,7 @@ All scores are on a 0–100 scale unless noted. Sentiment is a separate view and
 
 ## 1. What is included
 
-A call counts as a **connect** when Freshcaller marks it as a connected conversation. Voicemails and missed calls are excluded. If the connected flag is missing on an older recording, a call of 30 seconds or less is treated as a voicemail and left out.
+A call counts as a **connect** when Freshcaller marks it as a connected conversation. Voicemails and missed calls are excluded. If the connected flag is missing on an older recording, a call of 40 seconds or less is treated as a voicemail and left out.
 
 Only **analyzed connects** enter an average. A connect that has not been analyzed still counts on the Connects card.
 

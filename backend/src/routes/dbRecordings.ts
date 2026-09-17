@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Router } from "express";
 import { recordingsCollection, recordingListingsCollection, type RecordingDocument } from "../db/mongo.js";
+import { refreshAgentStats } from "../db/agents.js";
 import { isDisposition } from "../scoring/agentQuarter.js";
 import { toListingDoc, upsertRecordingListing } from "../db/recordingListings.js";
-import { analyzeRecordingOnce } from "../services/analyzeRecording.js";
+import { fillMissingIntroductionScripts } from "../scoring/fillIntroductionScript.js";
+import { analyzeRecordingOnce, confirmTranscriptOnce } from "../services/analyzeRecording.js";
 import {
   excludeForwardedMailFilter,
   excludeVoicemailFilter,
@@ -30,6 +32,9 @@ export type RecordingListItem = {
   isVoicemail?: boolean;
   isConnected?: boolean;
   answered?: boolean;
+  callStatus?: number | null;
+  botHandling?: RecordingDocument["botHandling"];
+  isBotInvolved?: boolean;
   localFileName?: string | null;
   hasLocalAudio: boolean;
   analysisStatus: RecordingDocument["analysisStatus"];
@@ -73,6 +78,9 @@ function toListItem(doc: RecordingDocument): RecordingListItem {
     isVoicemail: doc.isVoicemail ?? isLikelyVoicemail(durationSec),
     isConnected: doc.isConnected,
     answered: isAnsweredCall(doc),
+    callStatus: doc.callStatus ?? null,
+    botHandling: doc.botHandling ?? "none",
+    isBotInvolved: doc.isBotInvolved ?? false,
     localFileName: doc.localFileName,
     hasLocalAudio: Boolean(doc.localPath),
     analysisStatus: doc.analysisStatus,
@@ -324,6 +332,99 @@ export function createDbRecordingsRouter(): Router {
     }
   });
 
+  router.post("/:callId/confirm-transcript", async (req, res) => {
+    const callId = Number(req.params.callId);
+    if (!Number.isFinite(callId)) {
+      res.status(400).json({ error: "Invalid callId" });
+      return;
+    }
+
+    const recordingIdRaw = req.body?.recordingId ?? req.query.recordingId;
+    const recordingId =
+      recordingIdRaw != null && String(recordingIdRaw).trim() !== ""
+        ? Number(recordingIdRaw)
+        : undefined;
+
+    const chosenRaw = String(req.body?.chosenSource ?? "assemblyai").toLowerCase();
+    const chosenSource = chosenRaw === "whisper" ? "whisper" : "assemblyai";
+
+    req.setTimeout(20 * 60 * 1000);
+    res.setTimeout(20 * 60 * 1000);
+
+    try {
+      const { recording } = await confirmTranscriptOnce(callId, recordingId, { chosenSource });
+      await upsertRecordingListing(recording);
+      res.status(200).json({ recording: toDetail(recording, true) });
+    } catch (error) {
+      const status = (error as { status?: number }).status ?? 500;
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(status).json({ error: message });
+    }
+  });
+
+  /**
+   * POST /recordings/db/:callId/clear-analysis
+   * Removes transcript + analysis scores only; keeps call record, metadata, and local audio.
+   */
+  router.post("/:callId/clear-analysis", async (req, res) => {
+    const callId = Number(req.params.callId);
+    if (!Number.isFinite(callId)) {
+      res.status(400).json({ error: "Invalid callId" });
+      return;
+    }
+
+    const recordingIdRaw = req.body?.recordingId ?? req.query.recordingId;
+    const recordingId =
+      recordingIdRaw != null && String(recordingIdRaw).trim() !== ""
+        ? Number(recordingIdRaw)
+        : undefined;
+
+    try {
+      const doc = await findByCallId(callId, recordingId);
+      if (!doc) {
+        res.status(404).json({ error: `Recording not found for call ${callId}` });
+        return;
+      }
+
+      const now = new Date();
+      await recordingsCollection().updateOne(
+        { callId: doc.callId, recordingId: doc.recordingId },
+        {
+          $set: {
+            analysisStatus: "none",
+            analysisError: null,
+            updatedAt: now,
+          },
+          $unset: {
+            analysisResult: "",
+            analyzedAt: "",
+            analysisCorrections: "",
+          },
+        },
+      );
+
+      const updated = await findByCallId(doc.callId, doc.recordingId);
+      if (!updated) {
+        res.status(500).json({ error: "Recording disappeared after clear-analysis" });
+        return;
+      }
+
+      await upsertRecordingListing(updated);
+      if (updated.agentId) {
+        await refreshAgentStats(updated.agentId).catch(() => undefined);
+      }
+
+      res.json({
+        cleared: true,
+        recording: toDetail(updated, true),
+      });
+    } catch (error) {
+      const status = (error as { status?: number }).status ?? 500;
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(status).json({ error: message });
+    }
+  });
+
   /**
    * POST /recordings/db/:callId/analyze
    * Must be registered before GET /:callId
@@ -478,10 +579,16 @@ export function createDbRecordingsRouter(): Router {
           : undefined;
 
       const includeAnalysis = String(req.query.includeAnalysis ?? "true") !== "false";
-      const doc = await findByCallId(callId, recordingId);
+      let doc = await findByCallId(callId, recordingId);
       if (!doc) {
         res.status(404).json({ error: `Recording not found for call ${callId}` });
         return;
+      }
+
+      if (includeAnalysis && doc.analysisStatus === "completed") {
+        await fillMissingIntroductionScripts([doc]);
+        const refreshed = await findByCallId(callId, recordingId);
+        if (refreshed) doc = refreshed;
       }
 
       res.json({ recording: toDetail(doc, includeAnalysis) });

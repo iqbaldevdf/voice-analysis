@@ -15,6 +15,7 @@ recordings/
 __pycache__/
 *.pyc
 .env
+ai-service/.cache/
 .DS_Store
 frontend/dist/
 *.log
@@ -22,4 +23,8 @@ uvicorn.out.log
 uvicorn.err.log
 calls_*.json
 *.zip
+
+# Local gold-labeling session (keep templates/calls committed; not personal progress)
+ai-service/eval/gold/progress/progress.json
+ai-service/eval/gold/progress/*.tmp
 

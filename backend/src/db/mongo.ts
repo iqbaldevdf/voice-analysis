@@ -1,9 +1,19 @@
 import { MongoClient, type Db, type Collection } from "mongodb";
 
-export type AnalysisStatus = "none" | "queued" | "running" | "completed" | "failed";
+export type AnalysisStatus =
+  | "none"
+  | "queued"
+  | "transcribing"
+  | "running"
+  | "awaiting_transcript_review"
+  | "completed"
+  | "failed";
 
 /** Reviewer-set sales result. Separate from the model's Successful / Unsuccessful / Unclear. */
 export type SalesDisposition = "hung_up" | "not_interested" | "appointment" | "follow_up" | "dnc";
+
+/** Freshcaller bot involvement (F09). */
+export type BotHandling = "none" | "bot_only" | "bot_transferred";
 
 export type RecordingParticipant = {
   role: string;
@@ -41,6 +51,10 @@ export type RecordingDocument = {
   isConnected?: boolean;
   /** Freshcaller participant call_status when known. */
   callStatus?: number | null;
+  /** Bot handling from Freshcaller status 19 / bot participant (F09). */
+  botHandling?: BotHandling;
+  /** True when botHandling is bot_only or bot_transferred. */
+  isBotInvolved?: boolean;
   /** Reviewer-set sales disposition. Null until set. Appointment is the AG filter. */
   disposition?: SalesDisposition | null;
   localPath?: string | null;
@@ -91,6 +105,7 @@ export async function connectMongo(): Promise<Db> {
   await listing.createIndex({ isVoicemail: 1 });
   await listing.createIndex({ agentId: 1, createdTime: -1 });
   await listing.createIndex({ isConnected: 1, createdTime: -1 });
+  await listing.createIndex({ botHandling: 1, createdTime: -1 });
   await listing.createIndex({ callDate: -1 });
 
   const { ensureSyncCollections } = await import("./syncCollections.js");

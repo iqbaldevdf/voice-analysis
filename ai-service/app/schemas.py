@@ -5,12 +5,74 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class WordSpeakerValidation(BaseModel):
+    """Audit trail for acoustic speaker validation (physical A/B identity only)."""
+
+    original_speaker: str
+    validated_speaker: str
+    speaker_validation_status: Literal[
+        "confirmed",
+        "corrected",
+        "uncertain",
+        "insufficient_audio",
+        "skipped",
+        "overlap_preserved",
+    ] = "skipped"
+    speaker_validation_source: Optional[str] = None
+    speaker_validation_reason: Optional[str] = None
+    # Cosine similarity or heuristic score — NOT a calibrated probability.
+    speaker_validation_score: Optional[float] = None
+    speaker_validation_margin: Optional[float] = None
+    similarity_original: Optional[float] = None
+    similarity_validated: Optional[float] = None
+    # Cosine similarities vs A/B profiles (not probabilities).
+    similarity_to_a: Optional[float] = None
+    similarity_to_b: Optional[float] = None
+    boundary_shift: bool = False
+
+
+class SpeakerProfileQuality(BaseModel):
+    speaker: str
+    candidate_segments: int = 0
+    accepted_segments: int = 0
+    rejected_segments: int = 0
+    accepted_speech_seconds: float = 0.0
+    within_speaker_similarity: Optional[float] = None
+    profile_status: Literal["usable", "weak", "insufficient"] = "insufficient"
+
+
+class SpeakerValidationSummary(BaseModel):
+    enabled: bool = False
+    status: Literal["disabled", "skipped", "completed", "failed"] = "disabled"
+    method: Optional[str] = None
+    validated_at: Optional[str] = None
+    corrections_count: int = 0
+    suspicious_regions_count: int = 0
+    uncertain_regions_count: int = 0
+    notes: list[str] = Field(default_factory=list)
+    # Phase 3 diagnostics (cosine similarities are NOT probabilities)
+    profile_status: dict[str, str] = Field(default_factory=dict)
+    profile_quality: list[SpeakerProfileQuality] = Field(default_factory=list)
+    profile_separation: Optional[float] = None
+    profile_separation_status: Optional[Literal["ok", "weak", "unknown"]] = None
+    islands_checked: int = 0
+    island_corrections: int = 0
+    boundaries_checked: int = 0
+    boundary_corrections: int = 0
+    missed_boundary_candidates: int = 0
+    long_turn_corrections: int = 0
+    embedding_cache_hits: int = 0
+    embedding_cache_misses: int = 0
+    timing_ms: dict[str, float] = Field(default_factory=dict)
+
 class DiarizedWord(BaseModel):
     speaker: str
     start: float
     end: float
     word: str
     confidence: Optional[float] = None
+    speaker_raw: Optional[str] = None
+    speaker_validation: Optional[WordSpeakerValidation] = None
 
 
 class DiarizedUtterance(BaseModel):
@@ -21,6 +83,8 @@ class DiarizedUtterance(BaseModel):
     confidence: Optional[float] = None
     sentiment: Optional[Literal["POSITIVE", "NEUTRAL", "NEGATIVE"]] = None
     sentiment_confidence: Optional[float] = None
+    speaker_raw: Optional[str] = None
+    speaker_validation: Optional[WordSpeakerValidation] = None
 
 
 class SentimentSegment(BaseModel):
@@ -211,6 +275,18 @@ class TranscriptDisplayLine(BaseModel):
     text: str
 
 
+class BotSegment(BaseModel):
+    """Call-level + transcript bot involvement (F09 Phase 2)."""
+
+    involved: bool = False
+    handling: Literal["none", "bot_only", "bot_transferred"] = "none"
+    handoff_sec: Optional[float] = None
+    confidence: float = 0.0
+    method: str = "none"
+    bot_speaker: Optional[str] = None
+    tagged_utterance_count: int = 0
+
+
 class ParticipantPerformanceAnalysis(BaseModel):
     speaker: str
     participantRole: str = "unknown"
@@ -243,11 +319,48 @@ class ParticipantPerformanceAnalysis(BaseModel):
     repeatedStatements: int = 0
 
 
+class TranscriptPassSnapshot(BaseModel):
+    engine: str
+    model: Optional[str] = None
+    transcript_id: Optional[str] = None
+    utterances: list[DiarizedUtterance] = Field(default_factory=list)
+    full_text: str = ""
+
+
+class TranscriptReviewData(BaseModel):
+    status: Literal["auto_accepted", "pending", "user_confirmed"] = "pending"
+    wer: float = 0.0
+    similarity: float = 0.0
+    threshold_wer_max: float = 0.12
+    threshold_similarity_min: float = 0.88
+    pass_a: TranscriptPassSnapshot = Field(default_factory=lambda: TranscriptPassSnapshot(engine="assemblyai"))
+    pass_b: TranscriptPassSnapshot = Field(default_factory=lambda: TranscriptPassSnapshot(engine="faster_whisper"))
+    diff_summary: dict = Field(default_factory=dict)
+    chosen_source: Optional[Literal["assemblyai", "whisper", "user_edit"]] = None
+    confirmed_at: Optional[str] = None
+    confirmed_by: Optional[str] = None
+
+
+class DualTranscribeResponse(BaseModel):
+    needs_review: bool
+    processing_version: str = "2.0.0"
+    transcript_review: TranscriptReviewData
+    utterances: list[DiarizedUtterance] = Field(default_factory=list)
+    words: list[DiarizedWord] = Field(default_factory=list)
+    duration_sec: float = 0.0
+    language: str = "unknown"
+    transcript_id: Optional[str] = None
+    audio_probe: dict = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
 class CallAnalysisResult(BaseModel):
     language: str
     duration_sec: float
     speakers: list[str] = Field(default_factory=list)
     speaker_mapping: SpeakerMapping = Field(default_factory=SpeakerMapping)
+    speaker_validation: SpeakerValidationSummary = Field(default_factory=SpeakerValidationSummary)
+    bot_segment: BotSegment = Field(default_factory=BotSegment)
     transcript_display: list[TranscriptDisplayLine] = Field(default_factory=list)
     utterances: list[DiarizedUtterance] = Field(default_factory=list)
     words: list[DiarizedWord] = Field(default_factory=list)
@@ -262,3 +375,5 @@ class CallAnalysisResult(BaseModel):
     provider: str = "assemblyai"
     transcript_id: Optional[str] = None
     notes: list[str] = Field(default_factory=list)
+    processing_version: Optional[str] = None
+    transcript_review: Optional[TranscriptReviewData] = None

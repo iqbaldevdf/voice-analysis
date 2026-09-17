@@ -16,6 +16,8 @@ import {
 } from "recharts";
 import {
   analyzeDbRecording,
+  clearDbRecordingAnalysis,
+  confirmDbTranscript,
   fetchJob,
   formatDurationLong,
   formatTime,
@@ -28,7 +30,7 @@ import {
   type SpeakerMapping,
   type SpeakerMetrics,
 } from "../api";
-import { loadDbRecordingJob } from "../lib/recordingJob";
+import { jobFromDbRecording, loadDbRecordingJob } from "../lib/recordingJob";
 import { CallMetricsKpiRow } from "../components/CallMetricsKpiRow";
 import { IntroductionScriptPanel } from "../components/IntroductionScriptPanel";
 import { ParticipantPerformancePanel } from "../components/ParticipantPerformancePanel";
@@ -39,6 +41,7 @@ import { DISPOSITION_OPTIONS, dispositionClass, dispositionLabel } from "../lib/
 
 const AGENT_COLOR = "#2f6f5e";
 const CUSTOMER_COLOR = "#5c4d7a";
+const BOT_COLOR = "#b45309";
 const SILENCE_COLOR = "#c5cdc7";
 
 type Props = {
@@ -70,18 +73,33 @@ function pickRole(metrics: SpeakerMetrics[], role: "agent" | "customer"): Speake
   return metrics.find((m) => m.role_guess === role) ?? (role === "agent" ? metrics[0] : metrics[1]);
 }
 
-function utteranceIsAgent(
+function utteranceDisplayRole(
   utt: DiarizedUtterance,
   mapping?: SpeakerMapping | null,
   agentSpeaker?: string,
   displayRole?: string | null,
-): boolean {
-  if (displayRole === "agent") return true;
-  if (displayRole === "customer") return false;
+): "agent" | "customer" | "bot" {
+  if (displayRole === "bot") return "bot";
+  if (displayRole === "agent") return "agent";
+  if (displayRole === "customer") return "customer";
   const mapped = mapping?.mapping?.[utt.speaker];
-  if (mapped === "agent") return true;
-  if (mapped === "customer") return false;
-  return Boolean(agentSpeaker && utt.speaker === agentSpeaker);
+  if (mapped === "bot") return "bot";
+  if (mapped === "agent") return "agent";
+  if (mapped === "customer") return "customer";
+  return agentSpeaker && utt.speaker === agentSpeaker ? "agent" : "customer";
+}
+
+function roleColor(role: "agent" | "customer" | "bot"): string {
+  if (role === "bot") return BOT_COLOR;
+  if (role === "agent") return AGENT_COLOR;
+  return CUSTOMER_COLOR;
+}
+
+function botHandlingLabel(handling?: string | null, involved?: boolean): string | null {
+  if (handling === "bot_transferred") return "Bot → Agent";
+  if (handling === "bot_only") return "Bot handled";
+  if (involved) return "Bot involved";
+  return null;
 }
 
 function speakerAssignmentSummary(
@@ -178,19 +196,46 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
   const [disposition, setDisposition] = useState<SalesDisposition | "">(job.disposition ?? "");
   const [savingDisposition, setSavingDisposition] = useState(false);
   const [reanalyzing, setReanalyzing] = useState(false);
+  const [clearingAnalysis, setClearingAnalysis] = useState(false);
+  const [confirmingTranscript, setConfirmingTranscript] = useState(false);
+  const [transcriptPick, setTranscriptPick] = useState<"assemblyai" | "whisper">("assemblyai");
   const [swapConfirmOpen, setSwapConfirmOpen] = useState(false);
   const [swapConfirmChecked, setSwapConfirmChecked] = useState(false);
   const audioSrc = audioUrlOverride ?? jobAudioUrl(job.id);
   const isDbJob = job.id.startsWith("db-");
   const canReanalyze = isDbJob && job.freshcallerCallId != null && job.recordingId != null;
+  const canClearAnalysis =
+    canReanalyze &&
+    (job.dbAnalysisStatus === "completed" ||
+      job.dbAnalysisStatus === "failed" ||
+      job.dbAnalysisStatus === "awaiting_transcript_review" ||
+      Boolean(job.result));
 
   useEffect(() => {
     setDisposition(job.disposition ?? "");
   }, [job.id, job.disposition]);
 
   useEffect(() => {
-    if (isDbJob || job.status === "completed" || job.status === "failed") return;
+    if (!isDbJob) {
+      if (job.status === "completed" || job.status === "failed") return;
+    } else if (
+      job.dbAnalysisStatus === "completed" ||
+      job.dbAnalysisStatus === "failed" ||
+      job.dbAnalysisStatus === "awaiting_transcript_review" ||
+      job.dbAnalysisStatus === "none"
+    ) {
+      return;
+    }
     const timer = window.setInterval(async () => {
+      if (isDbJob && job.freshcallerCallId != null && job.recordingId != null) {
+        try {
+          const data = await loadDbRecordingJob(job.freshcallerCallId, job.recordingId);
+          onJobUpdate(data.job);
+        } catch (err) {
+          onError(err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
       try {
         const data = await fetchJob(job.id);
         onJobUpdate(data.job);
@@ -199,7 +244,16 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
       }
     }, 1500);
     return () => window.clearInterval(timer);
-  }, [job.id, job.status, isDbJob, onJobUpdate, onError]);
+  }, [
+    job.id,
+    job.status,
+    job.dbAnalysisStatus,
+    job.freshcallerCallId,
+    job.recordingId,
+    isDbJob,
+    onJobUpdate,
+    onError,
+  ]);
 
   const result = job.result;
   const meta = job.callMeta;
@@ -208,11 +262,11 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
   const sentiment = result?.llm_sentiment;
 
   const agentMetrics = useMemo(
-    () => (result ? pickRole(result.speaker_metrics, "agent") : undefined),
+    () => (result?.speaker_metrics ? pickRole(result.speaker_metrics, "agent") : undefined),
     [result],
   );
   const customerMetrics = useMemo(
-    () => (result ? pickRole(result.speaker_metrics, "customer") : undefined),
+    () => (result?.speaker_metrics ? pickRole(result.speaker_metrics, "customer") : undefined),
     [result],
   );
 
@@ -359,15 +413,49 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
   );
 
   const handleFullReanalyze = useCallback(() => {
+    const freshAnalyze = job.dbAnalysisStatus === "none" || !job.result;
     if (
       !window.confirm(
-        "Re-analyze this call from audio? The transcript, speaker labels, and scores will be replaced.",
+        freshAnalyze
+          ? "Analyze this call from audio? This creates a new transcript and scores."
+          : "Re-analyze this call from audio? The transcript, speaker labels, and scores will be replaced.",
       )
     ) {
       return;
     }
     void runReanalyze("full");
-  }, [runReanalyze]);
+  }, [runReanalyze, job.dbAnalysisStatus, job.result]);
+
+  const handleClearAnalysis = useCallback(async () => {
+    const callId = job.freshcallerCallId;
+    const recordingId = job.recordingId;
+    if (!callId || !recordingId || clearingAnalysis || reanalyzing) return;
+    if (
+      !window.confirm(
+        "Clear analysis only? This removes the transcript and scores. The call record, audio, and metadata stay. You can Analyze again afterward.",
+      )
+    ) {
+      return;
+    }
+
+    setClearingAnalysis(true);
+    onError(null);
+    try {
+      const { recording } = await clearDbRecordingAnalysis(callId, recordingId);
+      onJobUpdate(jobFromDbRecording(recording));
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setClearingAnalysis(false);
+    }
+  }, [
+    job.freshcallerCallId,
+    job.recordingId,
+    clearingAnalysis,
+    reanalyzing,
+    onError,
+    onJobUpdate,
+  ]);
 
   const handleRemapLabels = useCallback(() => {
     if (
@@ -385,31 +473,291 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
     void runReanalyze("swap");
   }, [runReanalyze, swapConfirmChecked]);
 
-  if (job.status !== "completed" || !result || !cq) {
+  const awaitingTranscriptReview =
+    job.dbAnalysisStatus === "awaiting_transcript_review" ||
+    result?.transcript_review?.status === "pending";
+
+  const handleConfirmTranscript = useCallback(async () => {
+    const callId = job.freshcallerCallId;
+    const recordingId = job.recordingId;
+    if (!callId || !recordingId || confirmingTranscript) return;
+    setConfirmingTranscript(true);
+    onError(null);
+    try {
+      const { recording } = await confirmDbTranscript(callId, recordingId, transcriptPick);
+      onJobUpdate(jobFromDbRecording(recording));
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConfirmingTranscript(false);
+    }
+  }, [
+    job.freshcallerCallId,
+    job.recordingId,
+    confirmingTranscript,
+    transcriptPick,
+    onError,
+    onJobUpdate,
+  ]);
+
+  if (awaitingTranscriptReview && result) {
+    const review = result.transcript_review;
+    const passA = review?.pass_a?.utterances ?? result.utterances ?? [];
+    const passB = review?.pass_b?.utterances ?? [];
+    const werPct = review?.wer != null ? Math.round(review.wer * 100) : null;
+    const simPct = review?.similarity != null ? Math.round(review.similarity * 100) : null;
+
+    return (
+      <div className="details-page call-details-mock">
+        <button type="button" className="back-link" onClick={onBack}>
+          ← Back to Calls
+        </button>
+        <article className="panel transcript-review-panel">
+          <h1>Transcription needs your review</h1>
+          <p className="panel-sub">
+            AssemblyAI and Whisper produced different text. Pick the transcript that matches the
+            recording, then confirm to run sentiment and call scores.
+          </p>
+          {werPct != null && simPct != null ? (
+            <p className="meta-line">
+              Similarity <strong>{simPct}%</strong> · estimated WER <strong>{werPct}%</strong>
+            </p>
+          ) : null}
+          <audio
+            ref={audioRef}
+            src={audioSrc}
+            preload="metadata"
+            onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime ?? 0)}
+            onLoadedMetadata={() => setMediaDuration(audioRef.current?.duration ?? 0)}
+          />
+          <div className="transcript-review-pick">
+            <label className="transcript-review-option">
+              <input
+                type="radio"
+                name="transcript-pick"
+                checked={transcriptPick === "assemblyai"}
+                onChange={() => setTranscriptPick("assemblyai")}
+              />
+              Use AssemblyAI (speaker labels)
+            </label>
+            <label className="transcript-review-option">
+              <input
+                type="radio"
+                name="transcript-pick"
+                checked={transcriptPick === "whisper"}
+                onChange={() => setTranscriptPick("whisper")}
+              />
+              Use Whisper text (merged into AssemblyAI timing)
+            </label>
+          </div>
+          <div className="transcript-review-columns">
+            <div>
+              <h2 className="panel-title">AssemblyAI</h2>
+              <div className="transcript-list compact">
+                {passA.map((utt, i) => (
+                  <button
+                    key={`a-${i}`}
+                    type="button"
+                    className="transcript-row"
+                    onClick={() => seekTo(utt.start)}
+                  >
+                    <span className="transcript-time">{formatTime(utt.start)}</span>
+                    <span className="transcript-text">{utt.text}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h2 className="panel-title">Whisper</h2>
+              <div className="transcript-list compact">
+                {passB.map((utt, i) => (
+                  <button
+                    key={`b-${i}`}
+                    type="button"
+                    className="transcript-row"
+                    onClick={() => seekTo(utt.start)}
+                  >
+                    <span className="transcript-time">{formatTime(utt.start)}</span>
+                    <span className="transcript-text">{utt.text}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="transcript-review-actions">
+            <button
+              type="button"
+              className="btn primary"
+              disabled={confirmingTranscript}
+              onClick={() => void handleConfirmTranscript()}
+            >
+              {confirmingTranscript ? "Running analysis…" : "Confirm transcript & analyze"}
+            </button>
+          </div>
+        </article>
+      </div>
+    );
+  }
+
+  if (job.dbAnalysisStatus === "awaiting_transcript_review" && !result) {
     return (
       <div className="details-page call-details-mock">
         <button type="button" className="back-link" onClick={onBack}>
           ← Back to Calls
         </button>
         <div className="panel status-panel">
-          <h1>Call Details</h1>
-          <p className="meta-line">
-            Status: <strong>{statusLabel(job.status)}</strong>
+          <h1>Transcription needs your review</h1>
+          <p className="panel-sub">
+            Dual STT finished but transcript data did not load. Refresh this page or open the call
+            again from the list.
           </p>
-          {job.error && <p className="error-banner">{job.error}</p>}
-          {canReanalyze && job.status === "failed" ? (
-            <button
-              type="button"
-              className="btn secondary"
-              disabled={reanalyzing}
-              onClick={() => void handleFullReanalyze()}
-            >
-              {reanalyzing ? "Re-analyzing…" : "Re-analyze"}
-            </button>
-          ) : null}
-          {job.status !== "failed" && !reanalyzing && <div className="pulse" aria-hidden />}
-          {reanalyzing && <p className="panel-sub">Re-analyzing call… this may take a few minutes.</p>}
         </div>
+      </div>
+    );
+  }
+
+  if (job.status !== "completed" || !result || !cq) {
+    const dbStatus = job.dbAnalysisStatus;
+    const needsAnalysis = dbStatus === "none" || (dbStatus == null && !result && job.status === "queued");
+    const inProgress =
+      !needsAnalysis &&
+      (dbStatus === "running" || dbStatus === "transcribing" || dbStatus === "queued");
+    const durationSec = job.durationSec ?? mediaDuration ?? 0;
+    return (
+      <div className="details-page call-details-mock">
+        <div className="meeting-topbar">
+          <button type="button" className="back-link" onClick={onBack}>
+            ← Back to Calls
+          </button>
+          <div className="topbar-actions">
+            <a className="btn ghost" href={audioSrc} download>
+              Download Audio
+            </a>
+          </div>
+        </div>
+
+        <header className="call-brief">
+          <div className="call-brief-id">
+            <h1>{callIdLabel}</h1>
+            <span className="status-pill">
+              {needsAnalysis ? "No analysis" : inProgress ? "Analyzing" : statusLabel(job.status)}
+            </span>
+            {botHandlingLabel(job.botHandling, job.isBotInvolved) ? (
+              <span className="status-pill" title="Freshcaller bot involvement">
+                {botHandlingLabel(job.botHandling, job.isBotInvolved)}
+              </span>
+            ) : null}
+          </div>
+          <dl className="call-brief-facts">
+            <div>
+              <dt>When</dt>
+              <dd>
+                {created.toLocaleDateString(undefined, {
+                  day: "2-digit",
+                  month: "short",
+                  year: "numeric",
+                })}{" "}
+                · {created.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+              </dd>
+            </div>
+            <div>
+              <dt>Duration</dt>
+              <dd>{durationSec > 0 ? formatDurationLong(durationSec) : "—"}</dd>
+            </div>
+            <div>
+              <dt>Answered</dt>
+              <dd>{job.answered == null ? "—" : job.answered ? "Answered" : "Not answered"}</dd>
+            </div>
+            <div>
+              <dt>Type</dt>
+              <dd className="capitalize">{meta?.direction || "Call"}</dd>
+            </div>
+            <div>
+              <dt>Agent</dt>
+              <dd>
+                {agentName}
+                {agentParticipant?.phone || meta?.phoneNumber
+                  ? ` · ${agentParticipant?.phone || meta?.phoneNumber}`
+                  : ""}
+              </dd>
+            </div>
+            <div>
+              <dt>Customer</dt>
+              <dd>
+                {customerName}
+                {customerParticipant?.phone ? ` · ${customerParticipant.phone}` : ""}
+              </dd>
+            </div>
+            <div>
+              <dt>Bot</dt>
+              <dd>
+                {botHandlingLabel(job.botHandling, job.isBotInvolved) ?? "No bot"}
+              </dd>
+            </div>
+          </dl>
+        </header>
+
+        {job.botHandling === "bot_transferred" || job.botHandling === "bot_only" ? (
+          <div className="bot-callout" role="status">
+            {job.botHandling === "bot_transferred"
+              ? "A bot spoke on this call before the live agent joined. After analysis, bot lines are tagged in the transcript."
+              : "Freshcaller marked this call as bot-handled with no human agent connect."}
+          </div>
+        ) : null}
+
+        <section className="recording-workspace">
+          <article className="panel player-card" aria-label="Call recording">
+            <div className="player-head">
+              <h2 className="panel-title">Call recording</h2>
+            </div>
+            <div className="player-block">
+              <audio
+                ref={audioRef}
+                controls
+                src={audioSrc}
+                onLoadedMetadata={(e) => {
+                  const audio = e.currentTarget;
+                  if (Number.isFinite(audio.duration)) setMediaDuration(audio.duration);
+                }}
+              />
+            </div>
+          </article>
+
+          <article className="panel status-panel">
+            <h2 className="panel-title">
+              {needsAnalysis
+                ? "No analysis yet"
+                : inProgress
+                  ? dbStatus === "transcribing"
+                    ? "Transcribing…"
+                    : "Analysis in progress"
+                  : "Analysis"}
+            </h2>
+            {needsAnalysis ? (
+              <p className="panel-sub">
+                Call record and audio are kept. Run Analyze to create a transcript and scores.
+              </p>
+            ) : null}
+            {inProgress ? (
+              <p className="panel-sub">
+                This can take several minutes for long calls. Keep this page open or return later.
+              </p>
+            ) : null}
+            {job.error && <p className="error-banner">{job.error}</p>}
+            {canReanalyze && (needsAnalysis || job.status === "failed") ? (
+              <button
+                type="button"
+                className="btn primary"
+                disabled={reanalyzing || clearingAnalysis}
+                onClick={() => void handleFullReanalyze()}
+              >
+                {reanalyzing ? "Analyzing…" : needsAnalysis ? "Analyze call" : "Re-analyze"}
+              </button>
+            ) : null}
+            {inProgress && !reanalyzing ? <div className="pulse" aria-hidden /> : null}
+            {reanalyzing && <p className="panel-sub">Analyzing call… this may take a few minutes.</p>}
+          </article>
+        </section>
       </div>
     );
   }
@@ -427,6 +775,11 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
 
   const agentMono = longestMonologueSec(utterances, agentMetrics?.speaker);
   const customerMono = longestMonologueSec(utterances, customerMetrics?.speaker);
+  const botLabel =
+    botHandlingLabel(job.botHandling, job.isBotInvolved) ||
+    botHandlingLabel(result?.bot_segment?.handling, result?.bot_segment?.involved);
+  const botHandoffSec = result?.bot_segment?.handoff_sec;
+  const botTaggedCount = result?.bot_segment?.tagged_utterance_count ?? 0;
 
   async function copyCallId() {
     try {
@@ -462,6 +815,11 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
             Copy
           </button>
           <span className="status-pill">Completed</span>
+          {botLabel ? (
+            <span className="status-pill" title="Freshcaller bot involvement">
+              {botLabel}
+            </span>
+          ) : null}
         </div>
         <dl className="call-brief-facts">
           <div>
@@ -503,13 +861,30 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
               {customerParticipant?.phone ? ` · ${customerParticipant.phone}` : ""}
             </dd>
           </div>
+          <div>
+            <dt>Bot</dt>
+            <dd>{botLabel ?? "No bot"}</dd>
+          </div>
         </dl>
       </header>
+
+      {botLabel ? (
+        <div className="bot-callout" role="status">
+          {job.botHandling === "bot_transferred" || result?.bot_segment?.handling === "bot_transferred"
+            ? `A bot spoke before the live agent${
+                botHandoffSec != null ? ` (handoff ≈ ${formatTime(botHandoffSec)})` : ""
+              }.${botTaggedCount > 0 ? ` ${botTaggedCount} transcript line(s) tagged as Bot.` : ""}`
+            : job.botHandling === "bot_only"
+              ? "Freshcaller marked this call as bot-handled with no human agent connect."
+              : "Bot involvement detected on this call. Bot lines are tagged in the transcript."}
+        </div>
+      ) : null}
 
       <CallMetricsKpiRow
         overallScore={quality.callQualityScore}
         talkYou={talkYou}
         talkCustomer={talkCustomer}
+        introductionScriptScore={result?.introduction_script?.score ?? null}
         avgResponseTimeSec={cq.avg_response_time_sec}
         silenceRatioPct={cq.silence_ratio_pct}
         silenceSec={silenceSec}
@@ -717,7 +1092,7 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
                 const left = duration > 0 ? (utt.start / duration) * 100 : 0;
                 const width = duration > 0 ? ((utt.end - utt.start) / duration) * 100 : 0;
                 const displayLine = transcriptDisplayByKey.get(`${utt.start}-${utt.speaker}`);
-                const isAgent = utteranceIsAgent(
+                const role = utteranceDisplayRole(
                   utt,
                   speakerMapping,
                   agentMetrics?.speaker,
@@ -730,7 +1105,7 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
                     style={{
                       left: `${left}%`,
                       width: `${Math.max(width, 0.35)}%`,
-                      background: isAgent ? AGENT_COLOR : CUSTOMER_COLOR,
+                      background: roleColor(role),
                     }}
                   />
                 );
@@ -744,6 +1119,11 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
               <span>
                 <i style={{ background: CUSTOMER_COLOR }} /> {customerName}
               </span>
+              {job.isBotInvolved || result?.bot_segment?.involved ? (
+                <span>
+                  <i style={{ background: BOT_COLOR }} /> Bot
+                </span>
+              ) : null}
             </div>
           </div>
         </article>
@@ -752,17 +1132,30 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
           <div className="transcript-head">
             <div className="transcript-head-title">
               <h2 className="panel-title">Transcript</h2>
-              {canReanalyze ? (
-                <button
-                  type="button"
-                  className="btn secondary compact"
-                  disabled={reanalyzing}
-                  onClick={() => void handleFullReanalyze()}
-                  title="Re-transcribe from audio and replace all analysis"
-                >
-                  {reanalyzing ? "Re-analyzing…" : "Re-analyze"}
-                </button>
-              ) : null}
+              <div className="transcript-head-actions">
+                {canClearAnalysis ? (
+                  <button
+                    type="button"
+                    className="btn ghost compact danger-text"
+                    disabled={clearingAnalysis || reanalyzing}
+                    onClick={() => void handleClearAnalysis()}
+                    title="Remove transcript and scores only — call record and audio stay"
+                  >
+                    {clearingAnalysis ? "Clearing…" : "Clear analysis"}
+                  </button>
+                ) : null}
+                {canReanalyze ? (
+                  <button
+                    type="button"
+                    className="btn secondary compact"
+                    disabled={reanalyzing || clearingAnalysis}
+                    onClick={() => void handleFullReanalyze()}
+                    title="Re-transcribe from audio and replace all analysis"
+                  >
+                    {reanalyzing ? "Re-analyzing…" : "Re-analyze"}
+                  </button>
+                ) : null}
+              </div>
             </div>
             {canReanalyze && labelsLookUncertain && speakerAssignment ? (
               <div className="speaker-fix-callout" role="region" aria-label="Speaker label review">
@@ -950,26 +1343,33 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
             {filteredUtterances.length === 0 && <p className="empty soft">No transcript yet</p>}
             {filteredUtterances.map((utt, idx) => {
               const displayLine = transcriptDisplayByKey.get(`${utt.start}-${utt.speaker}`);
-              const isAgent = utteranceIsAgent(
+              const role = utteranceDisplayRole(
                 utt,
                 speakerMapping,
                 agentMetrics?.speaker,
                 displayLine?.role,
               );
-              const label = displayLine?.display_name || (isAgent ? agentName : customerName);
+              const label =
+                displayLine?.display_name ||
+                (role === "bot" ? "Bot" : role === "agent" ? agentName : customerName);
               const isActive = currentTime >= utt.start && currentTime < utt.end + 0.05;
               return (
                 <button
                   key={`${utt.start}-${idx}`}
                   type="button"
-                  className={`transcript-row ${isAgent ? "agent" : "customer"}${isActive ? " active" : ""}`}
+                  className={`transcript-row ${role}${isActive ? " active" : ""}`}
                   onClick={() => seekTo(utt.start)}
                 >
                   <div className="transcript-meta">
                     <time>{formatTime(utt.start)}</time>
-                    <span className="speaker" style={{ color: isAgent ? AGENT_COLOR : CUSTOMER_COLOR }}>
+                    <span className="speaker" style={{ color: roleColor(role) }}>
                       {label}
                     </span>
+                    {role === "bot" ? (
+                      <span className="badge muted" title="Automated / IVR — not the live agent">
+                        Bot asked this
+                      </span>
+                    ) : null}
                     <span className="sent-icon" title={utt.sentiment || "NEUTRAL"}>
                       {sentimentEmoji(utt.sentiment)}
                     </span>

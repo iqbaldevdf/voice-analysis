@@ -11,6 +11,8 @@ import httpx
 
 from app.introduction_script import score_introduction_script
 from app.participant_performance import run_participant_performance
+from app.pipeline.audio_speaker_validation import maybe_validate_speakers
+from app.pipeline.bot_tagging import tag_bot_utterances
 from app.pipeline.speaker_mapping import map_speakers
 from app.pipeline.transcript_builder import (
     build_llm_transcript,
@@ -28,6 +30,7 @@ from app.schemas import (
     CallAnalysisResult,
     DiarizedUtterance,
     DiarizedWord,
+    SpeakerValidationSummary,
     LlmSentimentAnalysis,
     SentimentEmotion,
     SentimentHighlight,
@@ -510,7 +513,7 @@ Transcript excerpt:
         speaker_override: dict[str, str] | None = None,
         avg_asr_confidence: float | None = None,
     ) -> CallAnalysisResult:
-        """Re-run mapping, transcript labels, LLM, and scores without re-STT."""
+        """Re-run mapping + LLM without re-STT. Skips acoustic speaker validation."""
         confidences: list[float] = []
         for utterance in utterances:
             if utterance.confidence is not None:
@@ -530,6 +533,8 @@ Transcript excerpt:
             speaker_override=speaker_override,
             avg_asr_confidence=avg_asr_confidence,
             notes_prefix=["Remap-only analysis (STT skipped)."],
+            audio_path=None,
+            skip_audio_speaker_validation=True,
         )
 
     def _build_analysis_result(
@@ -545,17 +550,55 @@ Transcript excerpt:
         speaker_override: dict[str, str] | None = None,
         avg_asr_confidence: float | None = None,
         notes_prefix: list[str] | None = None,
+        audio_path: str | None = None,
+        skip_audio_speaker_validation: bool = False,
     ) -> CallAnalysisResult:
         notes: list[str] = list(notes_prefix or [])
         context = participant_context or {}
+
+        utterances, words, speaker_validation = maybe_validate_speakers(
+            audio_path=audio_path,
+            utterances=utterances,
+            words=words,
+            skip=skip_audio_speaker_validation,
+            recording_id=transcript_id,
+        )
+        if speaker_validation.enabled and speaker_validation.status == "completed":
+            notes.append(
+                "Audio speaker validation: "
+                f"suspicious={speaker_validation.suspicious_regions_count}, "
+                f"corrected={speaker_validation.corrections_count}, "
+                f"uncertain={speaker_validation.uncertain_regions_count}."
+            )
+        elif speaker_validation.status == "failed":
+            notes.extend(speaker_validation.notes)
+
         speaker_mapping = map_speakers(utterances, context, speaker_override=speaker_override)
-        role_hints = speaker_mapping.mapping
+        role_hints = dict(speaker_mapping.mapping)
+        utterance_roles, bot_segment, role_hints = tag_bot_utterances(
+            utterances, role_hints, speaker_mapping, context
+        )
+        if bot_segment.involved and bot_segment.tagged_utterance_count:
+            notes.append(
+                f"Bot speech tagged: {bot_segment.tagged_utterance_count} turn(s) "
+                f"(method={bot_segment.method}"
+                + (
+                    f", handoff≈{bot_segment.handoff_sec:.0f}s"
+                    if bot_segment.handoff_sec is not None
+                    else ""
+                )
+                + ")."
+            )
+        if bot_segment.bot_speaker and bot_segment.bot_speaker in role_hints:
+            speaker_mapping = speaker_mapping.model_copy(
+                update={"mapping": {**speaker_mapping.mapping, **role_hints}}
+            )
         if speaker_mapping.mapping_uncertain:
             notes.append(
                 f"Speaker mapping uncertain (confidence {speaker_mapping.confidence:.0%}, method={speaker_mapping.method})"
             )
 
-        transcript_llm = build_llm_transcript(utterances, role_hints)
+        transcript_llm = build_llm_transcript(utterances, role_hints, utterance_roles=utterance_roles)
         llm_sentiment, sentiment_segments = self.run_llm_sentiment(
             transcript_id,
             utterances,
@@ -582,11 +625,13 @@ Transcript excerpt:
             role_hints=role_hints,
         )
 
-        transcript_preview = build_role_transcript_preview(utterances, role_hints)
+        transcript_preview = build_role_transcript_preview(
+            utterances, role_hints, utterance_roles=utterance_roles
+        )
         ai_extraction = self.run_llm_extraction(transcript_id, transcript_preview)
 
         named_roles = context.get("participants") if isinstance(context.get("participants"), list) else []
-        display_names: dict[str, str] = {}
+        display_names: dict[str, str] = {"bot": "Bot"}
         agent_name = str(context.get("agentName") or "").strip()
         if agent_name:
             display_names["agent"] = agent_name
@@ -599,10 +644,14 @@ Transcript excerpt:
                 continue
             if "customer" in role or "caller" in role or "client" in role:
                 display_names["customer"] = name
+            elif "bot" in role:
+                display_names["bot"] = name
             elif any(hint in role for hint in ("agent", "rep", "user", "executive")):
                 display_names.setdefault("agent", name)
 
-        transcript_display = build_transcript_display(utterances, role_hints, display_names)
+        transcript_display = build_transcript_display(
+            utterances, role_hints, display_names, utterance_roles=utterance_roles
+        )
         participant_performance = run_participant_performance(
             utterances=utterances,
             role_hints=role_hints,
@@ -616,8 +665,14 @@ Transcript excerpt:
         if any(item.note for item in participant_performance):
             notes.extend(item.note for item in participant_performance if item.note)
 
+        # Score intro on human agent turns only (exclude bot-tagged lines).
+        intro_utterances = [
+            u
+            for u, role in zip(utterances, utterance_roles)
+            if role != "bot"
+        ]
         introduction_script = score_introduction_script(
-            utterances=utterances,
+            utterances=intro_utterances or utterances,
             role_hints=role_hints,
         )
 
@@ -629,6 +684,8 @@ Transcript excerpt:
             duration_sec=round(duration_sec, 2),
             speakers=speakers,
             speaker_mapping=speaker_mapping,
+            speaker_validation=speaker_validation,
+            bot_segment=bot_segment,
             transcript_display=transcript_display,
             utterances=utterances,
             words=words,
@@ -645,6 +702,62 @@ Transcript excerpt:
             notes=notes,
         )
 
+    def transcribe_only(
+        self,
+        audio_path: str,
+        language: Optional[str] = None,
+    ) -> tuple[list[DiarizedUtterance], list[DiarizedWord], float, list[float], str, str]:
+        """AssemblyAI STT + diarization without LLM analytics."""
+        upload_url = self.upload_file(audio_path)
+        transcript_id = self.create_transcript(upload_url, language=language)
+        raw = self.wait_for_transcript(transcript_id)
+        utterances, words, duration_sec, confidences, language_code = self._parse_stt_payload(
+            raw, language=language
+        )
+        return utterances, words, duration_sec, confidences, language_code, transcript_id
+
+    def finalize_from_utterances(
+        self,
+        utterances: list[DiarizedUtterance],
+        words: list[DiarizedWord],
+        duration_sec: float,
+        *,
+        transcript_id: str | None = None,
+        language: str = "unknown",
+        participant_context: dict[str, Any] | None = None,
+        chosen_source: str | None = None,
+        transcript_review: Any | None = None,
+        audio_path: str | None = None,
+    ) -> CallAnalysisResult:
+        confidences: list[float] = []
+        for utterance in utterances:
+            if utterance.confidence is not None:
+                confidences.append(float(utterance.confidence))
+        for word in words:
+            if word.confidence is not None:
+                confidences.append(float(word.confidence))
+
+        notes_prefix = []
+        if chosen_source:
+            notes_prefix.append(f"Canonical transcript source: {chosen_source}.")
+
+        result = self._build_analysis_result(
+            utterances=utterances,
+            words=words,
+            duration_sec=duration_sec,
+            confidences=confidences,
+            language=language,
+            transcript_id=transcript_id,
+            participant_context=participant_context,
+            notes_prefix=notes_prefix,
+            audio_path=audio_path,
+            skip_audio_speaker_validation=False,
+        )
+        result.processing_version = "2.0.0"
+        if transcript_review is not None:
+            result.transcript_review = transcript_review
+        return result
+
     def analyze(
         self,
         audio_path: str,
@@ -652,11 +765,8 @@ Transcript excerpt:
         *,
         participant_context: dict[str, Any] | None = None,
     ) -> CallAnalysisResult:
-        upload_url = self.upload_file(audio_path)
-        transcript_id = self.create_transcript(upload_url, language=language)
-        raw = self.wait_for_transcript(transcript_id)
-        utterances, words, duration_sec, confidences, language_code = self._parse_stt_payload(
-            raw, language=language
+        utterances, words, duration_sec, confidences, language_code, transcript_id = self.transcribe_only(
+            audio_path, language=language
         )
         return self._build_analysis_result(
             utterances=utterances,
@@ -666,4 +776,6 @@ Transcript excerpt:
             language=language_code,
             transcript_id=transcript_id,
             participant_context=participant_context,
+            audio_path=audio_path,
+            skip_audio_speaker_validation=False,
         )

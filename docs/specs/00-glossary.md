@@ -5,8 +5,9 @@ Terms used consistently across all VoiceIQ specs.
 | Term | Definition |
 | --- | --- |
 | **VoiceIQ** | Product name for this call intelligence app. |
-| **Connect** | A call that counts as a live conversation (not voicemail, not missed). Used for agent KPIs and “Calls processed”. |
-| **Voicemail** | Freshcaller voicemail status, or a call ≤ 30 seconds (see F06). |
+| **Connect** | A call that counts as a live conversation (not voicemail, not missed, not bot-only). Used for agent KPIs and “Calls processed”. |
+| **Voicemail** | Freshcaller voicemail status, or a call ≤ 40 seconds (see F06). |
+| **Bot handling** | Freshcaller `call_status` 19 / bot participant: `bot_only` or `bot_transferred` (see F09). |
 | **Analyze** | Run STT + sentiment + performance scoring once; store `analysisResult` in MongoDB. |
 | **Call quality** | 0–100 score from clarity (50%) + speech-rate score (50%). Not the same as agent performance. |
 | **Agent performance** | 0–100 weighted score across seven behaviour categories after transcript exists. |

@@ -1,0 +1,19 @@
+[
+  {"speaker": "A", "start": 3.28, "end": 6.80, "text": "Hi, good morning. This is Singh. I work with Data Fortune."},
+  {"speaker": "B", "start": 6.80, "end": 8.52, "text": "I was trying to connect with"},
+  {"speaker": "A", "start": 8.52, "end": 12.24, "text": "Kevin Macham. Could you please direct my call?"},
+  {"speaker": "B", "start": 14.08, "end": 20.24, "text": "Yeah, I, I don't work at Bangkok any longer. Oh yeah,"},
+  {"speaker": "A", "start": 21.68, "end": 28.83, "text": "I was, I was, I was trying to connect with this company. Zyni Systems."},
+  {"speaker": "B", "start": 28.83, "end": 45.19, "text": "Yeah, that's correct. Yeah, they're. That's their orchestration system that they've developed with Super Micro. So do you have his email address by chance or"},
+  {"speaker": "A", "start": 46.87, "end": 52.23, "text": "so. Okay, so this is the company. This is his previous company number, you're saying sir?"},
+  {"speaker": "B", "start": 53.62, "end": 62.34, "text": "No, I just, I used, I. This is, this is my number. I used to help. Yeah, I used to help them out. Oh, that's great."},
+  {"speaker": "A", "start": 63.14, "end": 71.22, "text": "Okay, may I know your name or like, if possible, could you please help me out with Kevin's number where I can reach out to him? Actually."},
+  {"speaker": "B", "start": 72.26, "end": 74.10, "text": "Yeah, no problem. Just looking it up."},
+  {"speaker": "A", "start": 74.74, "end": 82.42, "text": "Oh great. Well, actually he's working in this company as a co founder, so I just thought to, you know, introduce ourselves."},
+  {"speaker": "B", "start": 84.27, "end": 88.75, "text": "So I can give you his email address and see if that helps."},
+  {"speaker": "A", "start": 89.55, "end": 89.95, "text": "Sure."},
+  {"speaker": "B", "start": 90.75, "end": 100.99, "text": "So it's just simply Kevin, which is spelled B E N T A U S us.com."},
+  {"speaker": "A", "start": 102.03, "end": 110.20, "text": "great. I'll surely send an email. Thank you so much for your valuable time. You have a fantastic weekend."},
+  {"speaker": "B", "start": 110.76, "end": 114.20, "text": "You as well. Thank you. Thank you. Enjoy your day. Bye. Bye."},
+  {"speaker": "A", "start": 114.68, "end": 115.56, "text": "Thank you. Bye."}
+]

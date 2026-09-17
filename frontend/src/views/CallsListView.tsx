@@ -32,6 +32,9 @@ function analysisBadge(status: DbRecordingListItem["analysisStatus"]): string {
   switch (status) {
     case "completed":
       return "Notes ready";
+    case "awaiting_transcript_review":
+      return "Review transcript";
+    case "transcribing":
     case "running":
     case "queued":
       return "Transcribing…";
@@ -151,7 +154,10 @@ export function CallsListView({
   }
 
   async function handleViewAnalysis(rec: DbRecordingListItem) {
-    if (rec.analysisStatus === "completed") {
+    if (
+      rec.analysisStatus === "completed" ||
+      rec.analysisStatus === "awaiting_transcript_review"
+    ) {
       onOpenDbRecording(rec.callId, rec.recordingId);
       return;
     }
@@ -366,6 +372,11 @@ export function CallsListView({
                       >
                         {analysisBadge(rec.analysisStatus)}
                       </span>
+                      {rec.botHandling === "bot_transferred" ? (
+                        <span className="badge muted" title="Freshcaller: bot then transferred to agent">
+                          Bot → Agent
+                        </span>
+                      ) : null}
                     </div>
                     <p className="meeting-meta">
                       <span>FC-{rec.callId}</span>
@@ -475,6 +486,15 @@ export function CallsListView({
                         <span className={`badge ${rec.answered ? "ok" : "muted"}`}>
                           {rec.answered ? "Answered" : "Not answered"}
                         </span>
+                        {rec.botHandling === "bot_transferred" ? (
+                          <span
+                            className="badge muted"
+                            style={{ marginLeft: 6 }}
+                            title="Freshcaller: bot then transferred to agent"
+                          >
+                            Bot → Agent
+                          </span>
+                        ) : null}
                       </td>
                       <td className="capitalize">{rec.direction || "—"}</td>
                       <td>

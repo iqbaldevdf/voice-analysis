@@ -10,6 +10,7 @@
     "import:recordings": "tsx scripts/import-recordings.ts",
     "sync:daily": "tsx scripts/run-daily-sync.ts",
     "check:mongo": "tsx scripts/check-mongo.ts",
+    "test:voicemail": "tsx src/freshcaller/connection.selftest.ts",
     "clear:analysis": "tsx scripts/clear-analysis-data.ts",
     "reset:db": "tsx scripts/reset-database.ts",
     "reanalyze": "tsx scripts/reanalyze-recording.ts"

@@ -51,6 +51,16 @@ export type TranscriptDisplayLine = {
   text: string;
 };
 
+export type BotSegment = {
+  involved?: boolean;
+  handling?: "none" | "bot_only" | "bot_transferred";
+  handoff_sec?: number | null;
+  confidence?: number;
+  method?: string;
+  bot_speaker?: string | null;
+  tagged_utterance_count?: number;
+};
+
 export type SpeakerMetrics = {
   speaker: string;
   role_guess?: string | null;
@@ -227,25 +237,50 @@ export type ParticipantPerformance = {
   repeatedStatements: number;
 };
 
+export type TranscriptPassSnapshot = {
+  engine: string;
+  model?: string | null;
+  transcript_id?: string | null;
+  utterances: DiarizedUtterance[];
+  full_text?: string;
+};
+
+export type TranscriptReviewData = {
+  status: "auto_accepted" | "pending" | "user_confirmed";
+  wer?: number;
+  similarity?: number;
+  threshold_wer_max?: number;
+  threshold_similarity_min?: number;
+  pass_a?: TranscriptPassSnapshot;
+  pass_b?: TranscriptPassSnapshot;
+  diff_summary?: Record<string, unknown>;
+  chosen_source?: "assemblyai" | "whisper" | "user_edit" | null;
+  confirmed_at?: string | null;
+  confirmed_by?: string | null;
+};
+
 export type CallAnalysisResult = {
-  language: string;
-  duration_sec: number;
-  speakers: string[];
+  language?: string;
+  duration_sec?: number;
+  speakers?: string[];
   speaker_mapping?: SpeakerMapping;
+  bot_segment?: BotSegment;
   transcript_display?: TranscriptDisplayLine[];
   utterances: DiarizedUtterance[];
-  words: DiarizedWord[];
-  sentiment_segments: SentimentSegment[];
+  words?: DiarizedWord[];
+  sentiment_segments?: SentimentSegment[];
   sentiment_timeline?: SentimentTimelinePoint[];
   llm_sentiment?: LlmSentimentAnalysis;
-  speaker_metrics: SpeakerMetrics[];
-  call_quality: CallQuality;
-  ai_extraction: AiExtraction;
+  speaker_metrics?: SpeakerMetrics[];
+  call_quality?: CallQuality;
+  ai_extraction?: AiExtraction;
   participant_performance?: ParticipantPerformance[];
   introduction_script?: IntroductionScriptScore;
   provider?: string;
   transcript_id?: string | null;
   notes?: string[];
+  processing_version?: string;
+  transcript_review?: TranscriptReviewData;
 };
 
 export type CallParticipantMeta = {
@@ -283,6 +318,9 @@ export type AnalysisJob = {
   recordingId?: number;
   disposition?: SalesDisposition | null;
   answered?: boolean;
+  botHandling?: "none" | "bot_only" | "bot_transferred";
+  isBotInvolved?: boolean;
+  dbAnalysisStatus?: DbAnalysisStatus;
 };
 
 export type RecordingInfo = {
@@ -438,7 +476,14 @@ export function analyzeFreshcallerCall(callId: number) {
   });
 }
 
-export type DbAnalysisStatus = "none" | "queued" | "running" | "completed" | "failed";
+export type DbAnalysisStatus =
+  | "none"
+  | "queued"
+  | "transcribing"
+  | "running"
+  | "awaiting_transcript_review"
+  | "completed"
+  | "failed";
 
 export type DbRecordingListItem = {
   callId: number;
@@ -457,6 +502,9 @@ export type DbRecordingListItem = {
   isVoicemail?: boolean;
   isConnected?: boolean;
   answered?: boolean;
+  callStatus?: number | null;
+  botHandling?: "none" | "bot_only" | "bot_transferred";
+  isBotInvolved?: boolean;
   localFileName?: string | null;
   hasLocalAudio: boolean;
   analysisStatus: DbAnalysisStatus;
@@ -589,6 +637,29 @@ export function analyzeDbRecording(
       ...(options?.swapSpeakers ? { swapSpeakers: true } : {}),
       ...(options?.speakerOverride ? { speakerOverride: options.speakerOverride } : {}),
       ...(options?.correctionReason ? { correctionReason: options.correctionReason } : {}),
+    }),
+  });
+}
+
+export function confirmDbTranscript(
+  callId: number,
+  recordingId: number,
+  chosenSource: "assemblyai" | "whisper",
+) {
+  return request<{ recording: DbRecordingDetail }>(`/recordings/db/${callId}/confirm-transcript`, {
+    method: "POST",
+    body: JSON.stringify({ recordingId, chosenSource }),
+  });
+}
+
+export function clearDbRecordingAnalysis(callId: number, recordingId?: number) {
+  return request<{
+    cleared: boolean;
+    recording: DbRecordingDetail;
+  }>(`/recordings/db/${callId}/clear-analysis`, {
+    method: "POST",
+    body: JSON.stringify({
+      ...(recordingId != null ? { recordingId } : {}),
     }),
   });
 }
@@ -828,6 +899,8 @@ export type AgentRecordingRow = {
   categoryScores?: Record<string, number | null> | null;
   introductionScore?: number | null;
   introductionRank?: string | null;
+  botHandling?: "none" | "bot_only" | "bot_transferred";
+  isBotInvolved?: boolean;
 };
 
 export type QuarterWindow = {

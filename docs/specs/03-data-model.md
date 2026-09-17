@@ -20,9 +20,11 @@ One document per Freshcaller call + recording pair.
 | `direction` | string | incoming / outgoing |
 | `isVoicemail` | boolean | From classification |
 | `isConnected` | boolean | Live conversation flag |
+| `botHandling` | enum | `none`, `bot_only`, `bot_transferred` (F09) |
+| `isBotInvolved` | boolean | True when botHandling ≠ `none` |
 | `disposition` | enum | `hung_up`, `not_interested`, `appointment`, `follow_up`, `dnc`, or null |
-| `analysisStatus` | enum | `none`, `queued`, `running`, `completed`, `failed` |
-| `analysisResult` | object | Full AI payload (large) |
+| `analysisStatus` | enum | `none`, `queued`, `transcribing`, `running`, `awaiting_transcript_review`, `completed`, `failed` |
+| `analysisResult` | object | Full AI payload (large); may include `bot_segment` (F09) |
 | `localPath` | string | Path to downloaded audio |
 | `recordingUrl` | string | Freshcaller URL |
 
@@ -65,6 +67,9 @@ Stored under `recording.analysisResult`:
 | `speaker_metrics[]` | Talk time, words, WPM |
 | `llm_sentiment` | Trajectory, emotions, risk flags |
 | `ai_extraction` | summary, tags, call_outcome, action_items |
+| `transcript_review` | Dual STT passes, WER, similarity, review status (F08) |
+| `speaker_validation` | Optional audio diarization audit summary (F07 Stage 3b): `profile_status`, `profile_quality[]`, `profile_separation`, island/boundary/long-turn counters, `timing_ms` |
+| `processing_version` | Pipeline version string (e.g. `2.0.0`) |
 
 See F02 and [Call-and-Agent-Performance.md](../Call-and-Agent-Performance.md) for scoring fields.
 

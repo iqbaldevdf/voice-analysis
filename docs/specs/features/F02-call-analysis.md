@@ -13,8 +13,8 @@ As a reviewer, I analyze a connect once and get transcript, scores, sentiment, a
 1. Analysis runs **at most once** per `(callId, recordingId)` unless failed retry or **force re-analyze**.
 2. Voicemail / ≤30s connects are rejected with 422 (F06).
 3. Audio path: download → normalize 16 kHz mono → AI service.
-4. Result stored in `recording.analysisResult`; status `completed`.
-5. Agent stats refreshed after success.
+4. Result stored in `recording.analysisResult`; status `completed` (or `awaiting_transcript_review` when dual STT disagrees — see F08).
+5. Agent stats refreshed after success (not while awaiting transcript review).
 
 ## AI outputs
 
@@ -37,12 +37,15 @@ As a reviewer, I analyze a connect once and get transcript, scores, sentiment, a
 - [x] AC7: **Remap-only** (`remapOnly: true`) re-runs speaker mapping + LLM on stored utterances (skips STT).
 - [x] AC8: **Swap speakers** (`swapSpeakers: true` + `remapOnly`) swaps agent/customer labels; corrections logged in `analysisCorrections`.
 - [x] AC9: Swap is not a primary button; shown in review callout when mapping uncertain, otherwise under collapsed **Transcript troubleshooting**, with checkbox confirmation before swap.
+- [x] AC10: Dual STT gate (F08): analysis does not complete until transcript is confirmed when engines disagree.
+- [x] AC11: Call details can **Clear analysis** (`POST .../clear-analysis`) to remove stored transcript and scores only; call record, audio, and metadata stay visible; Analyze can run again afterward.
 
 ## Implementation
 
 | File | Role |
 | --- | --- |
 | `backend/src/services/analyzeRecording.ts` | Orchestration |
+| `backend/src/routes/dbRecordings.ts` | Analyze + clear-analysis APIs |
 | `ai-service/app/providers/assemblyai.py` | STT + LLM |
 | `ai-service/app/participant_performance.py` | Scoring |
 | `frontend/src/views/CallDetailsView.tsx` | UI |

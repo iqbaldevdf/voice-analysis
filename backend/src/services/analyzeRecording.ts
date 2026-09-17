@@ -18,6 +18,7 @@ const __dirname = path.dirname(__filename);
 const backendRoot = path.resolve(__dirname, "../..");
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://127.0.0.1:8001";
+const DUAL_STT_ENABLED = process.env.DUAL_STT_ENABLED === "true";
 const NORMALIZED_DIR = path.resolve(backendRoot, process.env.NORMALIZED_DIR ?? "./data/normalized");
 const FC_RECORDINGS_DIR = path.resolve(
   backendRoot,
@@ -44,6 +45,8 @@ function participantContext(doc: RecordingDocument) {
     direction: doc.direction,
     callNotes: doc.callNotes,
     agentName: doc.agentName,
+    botHandling: doc.botHandling ?? "none",
+    isBotInvolved: doc.isBotInvolved ?? false,
     participants: (doc.participants ?? []).map((p) => ({
       role: p.role,
       name: p.name,
@@ -67,6 +70,90 @@ async function callAiService(normalizedPath: string, doc: RecordingDocument) {
   }
 
   return response.json();
+}
+
+type DualTranscribePayload = {
+  needs_review: boolean;
+  processing_version?: string;
+  transcript_review: Record<string, unknown>;
+  utterances: unknown[];
+  words: unknown[];
+  duration_sec: number;
+  language: string;
+  transcript_id?: string | null;
+};
+
+async function callAiTranscribeDual(normalizedPath: string, _doc: RecordingDocument) {
+  const response = await fetch(`${AI_SERVICE_URL}/transcribe-dual`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ audio_path: normalizedPath }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`AI transcribe-dual failed (${response.status}): ${body}`);
+  }
+  return response.json() as Promise<DualTranscribePayload>;
+}
+
+async function callAiFinalizeTranscript(
+  doc: RecordingDocument,
+  payload: {
+    utterances: unknown[];
+    words: unknown[];
+    duration_sec: number;
+    language: string;
+    transcript_id?: string | null;
+    chosen_source?: string;
+    transcript_review?: Record<string, unknown>;
+    audio_path?: string;
+  },
+) {
+  const response = await fetch(`${AI_SERVICE_URL}/finalize-transcript`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      utterances: payload.utterances,
+      words: payload.words,
+      duration_sec: payload.duration_sec,
+      language: payload.language,
+      transcript_id: payload.transcript_id,
+      participant_context: participantContext(doc),
+      chosen_source: payload.chosen_source,
+      transcript_review: payload.transcript_review,
+      audio_path: payload.audio_path,
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`AI finalize-transcript failed (${response.status}): ${body}`);
+  }
+  return response.json();
+}
+
+function utterancesForChosenSource(
+  review: Record<string, unknown>,
+  chosenSource: "assemblyai" | "whisper",
+): unknown[] {
+  const passA = review.pass_a as { utterances?: unknown[] } | undefined;
+  const passB = review.pass_b as { utterances?: unknown[] } | undefined;
+  if (chosenSource === "whisper" && passA?.utterances && passB?.utterances) {
+    return mergeWhisperIntoDiarization(passA.utterances as UtteranceLike[], passB.utterances as UtteranceLike[]);
+  }
+  return passA?.utterances ?? [];
+}
+
+type UtteranceLike = { speaker: string; start: number; end: number; text: string; confidence?: number | null };
+
+function mergeWhisperIntoDiarization(assembly: UtteranceLike[], whisper: UtteranceLike[]): UtteranceLike[] {
+  return assembly.map((utt) => {
+    const overlapping = whisper.filter((w) => w.end > utt.start && w.start < utt.end);
+    if (!overlapping.length) return utt;
+    const text = overlapping.map((w) => w.text.trim()).filter(Boolean).join(" ");
+    const confidence =
+      overlapping.reduce((sum, w) => sum + (w.confidence ?? 0), 0) / overlapping.length;
+    return { ...utt, text: text || utt.text, confidence };
+  });
 }
 
 async function callAiRemapService(
@@ -177,9 +264,22 @@ export async function analyzeRecordingOnce(
       { status: 422 },
     );
   }
+  if (doc.botHandling === "bot_only") {
+    throw Object.assign(
+      new Error(
+        `Call ${doc.callId} was skipped. Freshcaller marked this call as bot-handled with no human agent connect.`,
+      ),
+      { status: 422 },
+    );
+  }
 
   const remapOnly = Boolean(options?.remapOnly);
   const force = Boolean(options?.force) || remapOnly;
+
+  if (!force && doc.analysisStatus === "awaiting_transcript_review") {
+    await upsertRecordingListing(doc);
+    return { recording: doc, reused: true };
+  }
 
   if (!force && doc.analysisStatus === "completed" && doc.analysisResult) {
     await upsertRecordingListing(doc);
@@ -254,8 +354,69 @@ export async function analyzeRecordingOnce(
         outputPath,
       });
 
-      analysisResult = await callAiService(normalized.outputPath, doc);
       durationSec = doc.durationSec ?? normalized.durationSec;
+
+      if (DUAL_STT_ENABLED) {
+        await collection.updateOne(
+          { callId: doc.callId, recordingId: doc.recordingId },
+          { $set: { analysisStatus: "transcribing", updatedAt: new Date() } },
+        );
+
+        const dual = await callAiTranscribeDual(normalized.outputPath, doc);
+
+        if (dual.needs_review) {
+          analysisResult = {
+            processing_version: dual.processing_version ?? "2.0.0",
+            transcript_review: dual.transcript_review,
+            utterances: dual.utterances,
+            words: dual.words,
+            language: dual.language,
+            duration_sec: dual.duration_sec,
+            transcript_id: dual.transcript_id,
+          };
+
+          const reviewNow = new Date();
+          await collection.updateOne(
+            { callId: doc.callId, recordingId: doc.recordingId },
+            {
+              $set: {
+                analysisStatus: "awaiting_transcript_review",
+                analysisResult,
+                analysisError: null,
+                updatedAt: reviewNow,
+                ...(localPath ? { localPath } : {}),
+                ...(localFileName ? { localFileName } : {}),
+                ...(durationSec != null ? { durationSec } : {}),
+              },
+            },
+          );
+
+          const pending = await collection.findOne({
+            callId: doc.callId,
+            recordingId: doc.recordingId,
+          });
+          if (!pending) throw new Error("Recording disappeared after transcribe");
+          await upsertRecordingListing(pending);
+          return { recording: pending, reused: false };
+        }
+
+        analysisResult = await callAiFinalizeTranscript(doc, {
+          utterances: dual.utterances,
+          words: dual.words,
+          duration_sec: dual.duration_sec,
+          language: dual.language,
+          transcript_id: dual.transcript_id,
+          chosen_source: "assemblyai",
+          transcript_review: {
+            ...dual.transcript_review,
+            status: "auto_accepted",
+            chosen_source: "assemblyai",
+          },
+          audio_path: normalized.outputPath,
+        });
+      } else {
+        analysisResult = await callAiService(normalized.outputPath, doc);
+      }
     }
 
     const now = new Date();
@@ -347,6 +508,126 @@ export async function analyzeRecordingOnce(
     if (failedDoc) {
       await upsertRecordingListing(failedDoc).catch(() => undefined);
     }
+    throw error;
+  } finally {
+    runningKeys.delete(runKey);
+  }
+}
+
+export type ConfirmTranscriptOptions = {
+  chosenSource: "assemblyai" | "whisper";
+};
+
+export async function confirmTranscriptOnce(
+  callId: number,
+  recordingId?: number,
+  options?: ConfirmTranscriptOptions,
+): Promise<{ recording: RecordingDocument }> {
+  const chosenSource = options?.chosenSource ?? "assemblyai";
+  const collection = recordingsCollection();
+  const doc = await findRecordingDoc(callId, recordingId);
+  if (!doc) {
+    throw Object.assign(new Error(`Recording not found for call ${callId}`), { status: 404 });
+  }
+  if (doc.analysisStatus !== "awaiting_transcript_review") {
+    throw Object.assign(
+      new Error("Recording is not awaiting transcript review."),
+      { status: 422 },
+    );
+  }
+
+  const partial = doc.analysisResult as {
+    transcript_review?: Record<string, unknown>;
+    words?: unknown[];
+    duration_sec?: number;
+    language?: string;
+    transcript_id?: string | null;
+  } | null;
+
+  const review = partial?.transcript_review;
+  if (!review) {
+    throw Object.assign(new Error("Missing transcript_review payload."), { status: 422 });
+  }
+
+  const utterances = utterancesForChosenSource(review, chosenSource);
+  if (!utterances.length) {
+    throw Object.assign(new Error("No utterances available for confirmation."), { status: 422 });
+  }
+
+  const runKey = keyOf(doc.callId, doc.recordingId);
+  if (runningKeys.has(runKey)) {
+    throw Object.assign(
+      new Error(`Analysis is already running for call ${doc.callId}.`),
+      { status: 409 },
+    );
+  }
+
+  runningKeys.add(runKey);
+  await collection.updateOne(
+    { callId: doc.callId, recordingId: doc.recordingId },
+    { $set: { analysisStatus: "running", analysisError: null, updatedAt: new Date() } },
+  );
+
+  try {
+    const confirmedReview = {
+      ...review,
+      status: "user_confirmed",
+      chosen_source: chosenSource,
+      confirmed_at: new Date().toISOString(),
+      confirmed_by: "user",
+    };
+
+    const analysisResult = await callAiFinalizeTranscript(doc, {
+      utterances,
+      words: partial?.words ?? [],
+      duration_sec: partial?.duration_sec ?? doc.durationSec ?? 0,
+      language: partial?.language ?? "unknown",
+      transcript_id: partial?.transcript_id,
+      chosen_source: chosenSource,
+      transcript_review: confirmedReview,
+      audio_path: doc.localPath ?? undefined,
+    });
+
+    const now = new Date();
+    await collection.updateOne(
+      { callId: doc.callId, recordingId: doc.recordingId },
+      {
+        $set: {
+          analysisStatus: "completed",
+          analysisResult,
+          analyzedAt: now,
+          analysisError: null,
+          updatedAt: now,
+        },
+        $push: {
+          analysisCorrections: {
+            at: now,
+            reason: `transcript_confirmed_${chosenSource}`,
+            remapOnly: false,
+          },
+        },
+      },
+    );
+
+    const updated = await collection.findOne({ callId: doc.callId, recordingId: doc.recordingId });
+    if (!updated) throw new Error("Recording disappeared after confirm");
+    await upsertRecordingListing(updated);
+    if (updated.agentId) {
+      await refreshAgentStats(updated.agentId);
+    }
+    return { recording: updated };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await collection.updateOne(
+      { callId: doc.callId, recordingId: doc.recordingId },
+      {
+        $set: {
+          analysisStatus: "awaiting_transcript_review",
+          analysisError: message,
+          updatedAt: new Date(),
+        },
+      },
+    );
     throw error;
   } finally {
     runningKeys.delete(runKey);

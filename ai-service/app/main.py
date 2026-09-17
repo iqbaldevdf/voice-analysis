@@ -9,12 +9,17 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app.participant_performance import run_participant_performance
+from app.pipeline.dual_stt import dual_stt_enabled, run_dual_transcribe
 from app.providers.assemblyai import AssemblyAIProvider
+from app.introduction_script import score_introduction_script
 from app.schemas import (
     CallAnalysisResult,
     DiarizedUtterance,
     DiarizedWord,
+    DualTranscribeResponse,
+    IntroductionScriptScore,
     ParticipantPerformanceAnalysis,
+    TranscriptReviewData,
 )
 
 load_dotenv()
@@ -36,6 +41,11 @@ class ScorePerformanceRequest(BaseModel):
     call_notes: str | None = None
 
 
+class ScoreIntroductionScriptRequest(BaseModel):
+    utterances: list[DiarizedUtterance]
+    role_hints: dict[str, str] = Field(default_factory=dict)
+
+
 class RemapSpeakersRequest(BaseModel):
     utterances: list[DiarizedUtterance]
     words: list[DiarizedWord] = Field(default_factory=list)
@@ -44,6 +54,18 @@ class RemapSpeakersRequest(BaseModel):
     language: str | None = None
     participant_context: dict | None = None
     speaker_override: dict[str, str] | None = None
+
+
+class FinalizeTranscriptRequest(BaseModel):
+    utterances: list[DiarizedUtterance]
+    words: list[DiarizedWord] = Field(default_factory=list)
+    duration_sec: float
+    transcript_id: str | None = None
+    language: str | None = None
+    participant_context: dict | None = None
+    chosen_source: str | None = None
+    transcript_review: TranscriptReviewData | None = None
+    audio_path: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -66,7 +88,26 @@ def health() -> dict:
             "ASSEMBLYAI_LLM_GATEWAY_URL",
             "https://llm-gateway.assemblyai.com/v1/chat/completions",
         ),
+        "dual_stt_enabled": dual_stt_enabled(),
+        "whisper_model": os.getenv("WHISPER_MODEL", "small.en"),
+        "audio_speaker_validation": os.getenv("AUDIO_SPEAKER_VALIDATION", "false").lower()
+        in {"1", "true", "yes"},
     }
+
+
+@app.post("/score-introduction-script", response_model=IntroductionScriptScore)
+def score_introduction_script_endpoint(
+    request: ScoreIntroductionScriptRequest,
+) -> IntroductionScriptScore:
+    if not request.utterances:
+        raise HTTPException(status_code=400, detail="utterances are required")
+    try:
+        return score_introduction_script(
+            utterances=request.utterances,
+            role_hints=request.role_hints,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/score-performance", response_model=list[ParticipantPerformanceAnalysis])
@@ -103,6 +144,52 @@ def remap_speakers(request: RemapSpeakersRequest) -> CallAnalysisResult:
             language=request.language or "unknown",
             participant_context=request.participant_context,
             speaker_override=request.speaker_override,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/transcribe-dual", response_model=DualTranscribeResponse)
+def transcribe_dual(request: AnalyzeRequest) -> DualTranscribeResponse:
+    audio_path = Path(request.audio_path)
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail=f"Audio not found: {request.audio_path}")
+    if not audio_path.is_file():
+        raise HTTPException(status_code=400, detail="audio_path must be a file")
+    try:
+        return run_dual_transcribe(str(audio_path.resolve()), language=request.language)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/finalize-transcript", response_model=CallAnalysisResult)
+def finalize_transcript(request: FinalizeTranscriptRequest) -> CallAnalysisResult:
+    if not request.utterances:
+        raise HTTPException(status_code=400, detail="utterances are required")
+    try:
+        provider = get_provider()
+        review = request.transcript_review
+        if review and request.chosen_source:
+            review = review.model_copy(
+                update={
+                    "status": "user_confirmed",
+                    "chosen_source": request.chosen_source,
+                }
+            )
+        return provider.finalize_from_utterances(
+            utterances=request.utterances,
+            words=request.words,
+            duration_sec=request.duration_sec,
+            transcript_id=request.transcript_id,
+            language=request.language or "unknown",
+            participant_context=request.participant_context,
+            chosen_source=request.chosen_source,
+            transcript_review=review,
+            audio_path=request.audio_path,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

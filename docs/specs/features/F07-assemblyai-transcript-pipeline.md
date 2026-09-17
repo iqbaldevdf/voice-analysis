@@ -15,11 +15,17 @@ Today analysis is implemented as one method in `ai-service/app/providers/assembl
 ```
 Freshcaller metadata
         ↓
+   FFmpeg normalize (mono; typically 16 kHz for STT)
+        ↓
    AssemblyAI STT + diarization
         ↓
    utterances[]  (+ words[])
         ↓
-   speaker-aware transcript
+   word/temporal diarization heuristics (suspicious islands)
+        ↓
+   AUDIO-BASED SPEAKER VALIDATION (optional; ECAPA embeddings)
+        ↓
+   validated A/B transcript (originalSpeaker preserved)
         ↓
    speaker mapping  (A/B → agent | customer)
         ↓
@@ -28,6 +34,7 @@ Freshcaller metadata
    analytics + scoring modules
 ```
 
+**Important:** Audio validation answers *which physical voice* spoke a region. It does **not** assign Agent/Customer roles. End users are never asked to verify speaker labels or confidence scores.
 This spec defines **target behaviour** and a phased implementation plan. No code change until status moves to **Approved**.
 
 ---
@@ -103,6 +110,32 @@ Normalized in-memory (and optionally persisted) structure:
 - Preserve original diarization speaker id (`speaker_raw`) if labels are rewritten later
 - Empty utterances dropped
 
+### Stage 3b — Audio-based speaker validation (optional)
+
+**Flag:** `AUDIO_SPEAKER_VALIDATION` (default `false`).
+
+**Module:** `ai-service/app/pipeline/audio_speaker_validation.py`  
+**Embeddings:** SpeechBrain ECAPA-TDNN (`speechbrain/spkrec-ecapa-voxceleb`), CPU; optional deps in `requirements-speaker-validation.txt`.
+
+**Behaviour (Phase 2 + Phase 3):**
+
+1. Detect suspicious A/B islands (`A…B…A` / `B…A…B`) with duration ≤ `AUDIO_SV_ISLAND_MAX_SEC`.
+2. Build **robust** A/B profiles from non-island turns ≥ `AUDIO_SV_MIN_PROFILE_SEC`: leave-one-out outlier rejection, duration-weighted centroid, profile quality (`usable` / `weak` / `insufficient`).
+3. Measure cross-speaker profile separation (cosine). If too similar (`AUDIO_SV_WEAK_SEPARATION_COSINE`) or profiles not both `usable`, **disable auto-correction** for that call.
+4. Score islands via cosine similarity (not probability); sources: `audio_embedding_island`.
+5. Optional **boundary validation** (`AUDIO_SV_BOUNDARY_VALIDATION`, default on when master flag on): word-level early/late boundary shifts only with strong margin; source `audio_embedding_boundary`. Requires word timestamps. Production `analyze` / dual-STT `finalize` pass AssemblyAI words; utterance-only POC sidecars do not (boundary skips with `reason=no_words`).
+6. Optional **long-turn scan** (`AUDIO_SV_LONG_TURN_SCAN`, default off): flag missed-boundary candidates; auto-correct remains off unless `AUDIO_SV_LONG_TURN_VALIDATION=true` (still conservative).
+7. Embedding cache reuses identical `(startMs,endMs)` windows within a call.
+8. Outcomes: `confirmed` | `corrected` | `uncertain` | `insufficient_audio` (prefer uncertain over wrong correction).
+9. Preserve AssemblyAI label as `speaker_raw` / `speaker_validation.original_speaker`.
+10. Resample an inference **copy** to 16 kHz when needed; original recording unchanged.
+11. `remapOnly` / `swapSpeakers` **must not** re-run acoustic validation.
+
+**Phase 4 evaluation (offline, not product UX):** Gold labels are physical `A`/`B` only (not Agent/Customer). Dataset: `ai-service/eval/gold/`. Labeling UI: `scripts/gold_label_server.py` (local). Harness: `scripts/evaluate_audio_diarization.py` → `eval/DIARIZATION_EVAL_REPORT.md`. Metrics require manual `goldSpeaker`; do not enable production until false-correction rate is acceptable on labeled data.
+
+**Phase 5 (planned):** Optional NVIDIA NeMo ECAPA backend A/B vs SpeechBrain — see [ADR 002](../decisions/002-nvidia-ecapa-spike-plan.md). Embedding swap only; not transcription.
+
+**Recording-level audit:** `analysisResult.speaker_validation` including `profile_status`, `profile_quality`, `profile_separation`, `islands_checked`, `boundaries_checked`, `boundary_corrections`, `missed_boundary_candidates`, `timing_ms`, cache hits/misses.
 ### Stage 4 — Speaker mapping
 
 Dedicated step: `map_speakers(utterances, freshcaller_context) → SpeakerMapping`
@@ -211,8 +244,10 @@ Add to `recording.analysisResult` (summary; full shape in `03-data-model.md` whe
 | Field | Type | Notes |
 | --- | --- | --- |
 | `speaker_mapping` | object | `mapping`, `confidence`, `method`, `signals` |
+| `speaker_validation` | object | Audio validator summary (F07 Stage 3b) |
 | `transcript_display` | array | Optional enriched utterances for UI |
-| `speaker_raw` on utterances | string | Original AAI label if utterances rewritten |
+| `speaker_raw` on utterances/words | string | Original AAI label if rewritten |
+| `speaker_validation` on utterances/words | object | Per-region audit (`original_speaker`, `validated_speaker`, status, similarity score) |
 
 **Re-map without re-STT:** New endpoint `POST /remap-speakers` (optional phase) re-runs stages 4–7 on stored utterances.
 
@@ -228,7 +263,14 @@ Add to `recording.analysisResult` (summary; full shape in `03-data-model.md` whe
 - [x] AC6: Introduction script and performance use mapped agent speaker, not talk-time-only guess.
 - [x] AC7: Low-confidence mapping shows a visible note on call detail (no silent wrong attribution).
 - [x] AC8: Re-analyze existing calls produces new mapping fields; STT can be skipped when `transcript_id` + utterances cached (`POST /remap-speakers`, `remapOnly` on analyze).
-
+- [x] AC9: Optional audio speaker validation runs after AssemblyAI diarization and before `map_speakers` when `AUDIO_SPEAKER_VALIDATION=true`.
+- [x] AC10: Original AssemblyAI speaker labels are preserved for audit (`speaker_raw` / `original_speaker`); corrections use similarity scores, not claimed probabilities.
+- [x] AC11: `remapOnly` / `swapSpeakers` do not re-run acoustic validation.
+- [x] AC12: End users are not prompted to verify speaker labels or confidence scores; validation is automatic when enabled.
+- [x] AC13: Robust profiles reject within-speaker acoustic outliers; auto-correct requires usable A/B profiles and adequate separation.
+- [x] AC14: Boundary validation can reassign words near A↔B transitions only with strong acoustic margin; word timestamps unchanged except speaker label.
+- [x] AC15: Long-turn missed-boundary scan is independently flaggable and does not auto-correct by default.
+- [x] AC16: Offline Phase 4 gold format + eval harness exist (`eval/gold/`, `scripts/evaluate_audio_diarization.py`); production `AUDIO_SPEAKER_VALIDATION` remains default `false` until labeled metrics justify enablement.
 ---
 
 ## Implementation phases

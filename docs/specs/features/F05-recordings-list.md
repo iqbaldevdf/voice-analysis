@@ -15,7 +15,7 @@ As a reviewer, I browse synced calls, filter noise, sort, and open or batch-anal
 ## Default filters
 
 - **Hide voicemails** on by default (`excludeVoicemail=true`).
-- Excludes voicemails and calls **≤ 30 seconds** (F06).
+- Excludes voicemails and calls **≤ 40 seconds** (F06).
 
 ## List capabilities
 
@@ -28,7 +28,7 @@ As a reviewer, I browse synced calls, filter noise, sort, and open or batch-anal
 ## Acceptance criteria
 
 - [x] AC1: List loads from `/recordings/db/listings`.
-- [x] AC2: Hide voicemails removes ≤30s and voicemail rows.
+- [x] AC2: Hide voicemails removes ≤40s and voicemail rows.
 - [x] AC3: Analyze triggers POST analyze per call.
 - [x] AC4: Empty state when no data or filters too tight.
 

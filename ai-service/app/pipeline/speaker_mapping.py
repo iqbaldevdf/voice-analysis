@@ -349,7 +349,7 @@ def map_speakers(
         normalized: dict[str, str] = {}
         for speaker in speakers:
             role = str(speaker_override.get(speaker, "unknown")).lower()
-            if role not in {"agent", "customer", "unknown"}:
+            if role not in {"agent", "customer", "unknown", "bot"}:
                 role = "unknown"
             normalized[speaker] = role
         agent_speaker = next((s for s, r in normalized.items() if r == "agent"), None)

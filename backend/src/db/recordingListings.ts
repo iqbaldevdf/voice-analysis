@@ -21,6 +21,8 @@ export type RecordingListingDoc = {
   isVoicemail: boolean;
   isConnected?: boolean;
   callStatus?: number | null;
+  botHandling?: RecordingDocument["botHandling"];
+  isBotInvolved?: boolean;
   disposition?: RecordingDocument["disposition"];
   localFileName?: string | null;
   hasLocalAudio: boolean;
@@ -57,6 +59,8 @@ export function toListingDoc(doc: RecordingDocument): RecordingListingDoc {
     isVoicemail: doc.isVoicemail ?? isLikelyVoicemail(durationSec),
     isConnected: doc.isConnected,
     callStatus: doc.callStatus ?? null,
+    botHandling: doc.botHandling ?? "none",
+    isBotInvolved: doc.isBotInvolved ?? false,
     disposition: doc.disposition ?? null,
     localFileName: doc.localFileName,
     hasLocalAudio: Boolean(doc.localPath),

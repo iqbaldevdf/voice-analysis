@@ -13,7 +13,19 @@ export function jobFromDbRecording(rec: DbRecordingDetail): AnalysisJob {
     id: `db-${rec.callId}-${rec.recordingId}`,
     sourceName: rec.localFileName || `fc_${rec.callId}_${rec.recordingId}`,
     sourcePath: rec.localPath || "",
-    status: rec.analysisStatus === "completed" && result ? "completed" : "queued",
+    status:
+      rec.analysisStatus === "failed"
+        ? "failed"
+        : rec.analysisStatus === "awaiting_transcript_review" || rec.analysisStatus === "completed"
+          ? "completed"
+          : rec.analysisStatus === "running" ||
+              rec.analysisStatus === "transcribing" ||
+              rec.analysisStatus === "queued"
+            ? "analyzing"
+            : rec.analysisStatus === "none"
+              ? "queued"
+              : "analyzing",
+    dbAnalysisStatus: rec.analysisStatus,
     createdAt: rec.createdAt || now,
     updatedAt: rec.updatedAt || now,
     durationSec: rec.durationSec ?? undefined,
@@ -22,6 +34,8 @@ export function jobFromDbRecording(rec: DbRecordingDetail): AnalysisJob {
     recordingId: rec.recordingId,
     disposition: rec.disposition ?? null,
     answered: rec.answered,
+    botHandling: rec.botHandling ?? "none",
+    isBotInvolved: rec.isBotInvolved ?? false,
     callMeta: {
       callId: rec.callId,
       direction: rec.direction,

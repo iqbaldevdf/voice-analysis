@@ -41,6 +41,10 @@ As a team lead, I want to see whether agents cover the **Datafortune customer in
 | `backend/src/routes/agents.ts` | Quarter average + row field |
 | `frontend/src/components/IntroductionScriptPanel.tsx` | Call details UI |
 
+## Backfill (existing analyses)
+
+Completed recordings stored **before** F07 may lack `introduction_script`. On **GET** `/recordings/db/:callId` (with analysis) and on **agent recordings** load, the backend calls AI `POST /score-introduction-script` from stored utterances + speaker mapping, persists the result, then returns it (no full re-analyze).
+
 ## Re-analyze
 
 Existing analyzed calls do not have intro scores until **re-analyzed**.

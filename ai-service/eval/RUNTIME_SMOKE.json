@@ -1,0 +1,49 @@
+{
+  "calls": [
+    {
+      "callId": "9002261",
+      "recordingId": "5348624",
+      "audioPath": "C:\\Users\\MohammedIqbalM\\OneDrive - Datafortune Software Solutions Pvt. Ltd\\Desktop\\Official\\voice-analysis\\backend\\data\\fc-recordings\\fc_9002261_5348624.wav",
+      "audioExists": true,
+      "segments": 17,
+      "ecapa_ran": true,
+      "summary_status": "completed",
+      "method": "speechbrain_ecapa_voxceleb",
+      "profile_status": {
+        "A": "usable",
+        "B": "usable"
+      },
+      "profile_separation": 0.303,
+      "islands_checked": 3,
+      "island_corrections": 0,
+      "boundaries_checked": 16,
+      "boundary_corrections": 0,
+      "corrections_count": 0,
+      "uncertain_regions_count": 4,
+      "timing_ms": {
+        "model_or_embed_setup_ms": 13183.54,
+        "profile_embedding_ms": 2272.22,
+        "island_validation_ms": 180.91,
+        "boundary_validation_ms": 1486.55,
+        "long_turn_validation_ms": 0.0,
+        "total_ms": 17123.21
+      },
+      "utterances_out": 17,
+      "words_out": 237,
+      "aba_pattern_present": true,
+      "short_utterance_outcomes": [
+        {
+          "text": "Sure.",
+          "start": 89.55,
+          "end": 89.95,
+          "speaker": "A",
+          "status": "insufficient_audio",
+          "reason": "short_utterance",
+          "original": "A"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "ecapa_ran_any": true
+}

@@ -2416,6 +2416,22 @@ input[type="text"] {
   flex-wrap: wrap;
 }
 
+.transcript-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn.danger-text {
+  color: var(--danger);
+}
+
+.btn.danger-text:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--control-border));
+  background: color-mix(in srgb, var(--danger) 8%, #fff);
+}
+
 .transcript-head-title .panel-title {
   margin: 0;
 }
@@ -2425,6 +2441,58 @@ input[type="text"] {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.transcript-review-panel {
+  margin-top: 1rem;
+  max-width: 1100px;
+}
+
+.transcript-review-panel h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.35rem;
+}
+
+.transcript-review-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.transcript-review-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.transcript-review-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+@media (max-width: 900px) {
+  .transcript-review-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.transcript-list.compact .transcript-row {
+  text-align: left;
+  width: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.35rem 0;
+}
+
+.transcript-review-actions {
+  margin-top: 1.25rem;
+  display: flex;
+  gap: 0.75rem;
 }
 
 .speaker-fix-callout {
@@ -2574,6 +2642,22 @@ input[type="text"] {
 
 .transcript-row.customer .bubble {
   border-left: 3px solid var(--accent-2);
+}
+
+.transcript-row.bot .bubble {
+  border-left: 3px solid #b45309;
+  background: #fff7ed;
+}
+
+.bot-callout {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  font-size: 0.92rem;
+  line-height: 1.4;
 }
 
 .status-panel {

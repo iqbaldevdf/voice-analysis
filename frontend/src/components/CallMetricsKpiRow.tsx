@@ -7,6 +7,8 @@ export type CallMetricsKpiValues = {
   overallScore: number | null;
   talkYou: number;
   talkCustomer: number;
+  /** Introduction script analysis score (0–100), F07. */
+  introductionScriptScore?: number | null;
   avgResponseTimeSec: number | null;
   silenceRatioPct: number | null;
   silenceSec: number | null;
@@ -71,6 +73,7 @@ export function CallMetricsKpiRow({
   overallScore,
   talkYou,
   talkCustomer,
+  introductionScriptScore,
   avgResponseTimeSec,
   silenceRatioPct,
   silenceSec,
@@ -106,6 +109,11 @@ export function CallMetricsKpiRow({
           <b style={{ width: `${Math.max(4, talkCustomerRounded)}%` }} />
         </div>
         <em>{talkCustomerRounded}% Customer</em>
+        {introductionScriptScore != null ? (
+          <em className={`intro-script-kpi ${scoreTone(introductionScriptScore)}`}>
+            Script analysis: <strong>{Math.round(introductionScriptScore)}</strong>/100
+          </em>
+        ) : null}
       </article>
       <article className="kpi-card">
         <MetricLabel layout="corner" help={metricHelp("avgResponseTime", helpScope)}>Avg Response Time</MetricLabel>

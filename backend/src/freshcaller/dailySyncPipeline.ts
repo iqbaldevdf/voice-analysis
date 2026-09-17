@@ -453,6 +453,8 @@ export async function runDailySync(
         isVoicemail: connection.isVoicemail,
         isConnected: connection.isConnected,
         callStatus: connection.callStatus,
+        botHandling: connection.botHandling,
+        isBotInvolved: connection.isBotInvolved,
         localPath: existingRec?.localPath ?? null,
         localFileName: existingRec?.localFileName ?? null,
         analysisStatus: existingRec?.analysisStatus ?? "none",

@@ -44,6 +44,7 @@ Mongo: `docker compose up -d`
 | Agent KPIs | F03 + Call-and-Agent-Performance.md |
 | Disposition | F04 |
 | List filters | F05, F06 |
+| Bot handling | F09 |
 | API shapes | 04-api-contract.md |
 | Mongo fields | 03-data-model.md |
 

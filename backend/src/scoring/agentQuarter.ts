@@ -242,6 +242,7 @@ export type RecordingQuarterInput = {
   disposition?: string | null;
   isConnected?: boolean;
   isVoicemail?: boolean;
+  botHandling?: string | null;
   callNotes?: string | null;
 };
 

@@ -3,7 +3,8 @@ export type MetricHelpScope = "call" | "quarter";
 const CALL: Record<string, string> = {
   overallScore:
     "Call quality: 50% clarity + 50% speech-rate score. Clarity uses STT confidence (penalized if silence > 35%). Speech rate scores 100 at 120–192 wpm.",
-  talkListen: "Agent vs customer talk-time % from speaker diarization.",
+  talkListen:
+    "Agent vs customer talk-time % from speaker diarization. Script analysis score (when shown) rates the opening pitch themes (F07).",
   avgResponseTime: "Average pause before the other person speaks. Good: 2.5s or less.",
   silence: "Share of the call with no speech (total duration minus talk time).",
   interruptions: "Times one speaker talked over the other. Good: 2 or fewer.",

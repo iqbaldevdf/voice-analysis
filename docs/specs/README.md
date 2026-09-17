@@ -40,6 +40,8 @@ This folder is the **source of truth** for what VoiceIQ should do. Code implemen
 | F06 | [Voicemail & connect rules](./features/F06-voicemail-filtering.md) | Implemented |
 | F07 | [Introduction script compliance](./features/F07-introduction-script.md) | Implemented |
 | F07 | [AssemblyAI transcript pipeline](./features/F07-assemblyai-transcript-pipeline.md) | Partial |
+| F08 | [Dual STT + transcript review](./features/F08-dual-stt-transcript-review.md) | Implemented |
+| F09 | [Bot call handling](./features/F09-bot-call-handling.md) | Implemented |
 
 ### Scoring detail (canonical)
 
@@ -50,6 +52,7 @@ This folder is the **source of truth** for what VoiceIQ should do. Code implemen
 | ADR | Topic |
 | --- | --- |
 | [001-spec-driven-workflow.md](./decisions/001-spec-driven-workflow.md) | Why and how we use SDD |
+| [002-nvidia-ecapa-spike-plan.md](./decisions/002-nvidia-ecapa-spike-plan.md) | NVIDIA NeMo ECAPA embedding spike (planned) |
 
 ### Templates
 

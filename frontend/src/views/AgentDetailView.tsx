@@ -169,7 +169,10 @@ export function AgentDetailView({ onError }: Props) {
   }
 
   async function analyzeRows(rows: AgentRecordingRow[]) {
-    const pending = rows.filter((row) => row.analysisStatus !== "completed");
+    const pending = rows.filter(
+      (row) =>
+        row.analysisStatus !== "completed" && row.analysisStatus !== "awaiting_transcript_review",
+    );
     if (pending.length === 0) {
       setBatchNotice("Selected calls are already analyzed. Open a row to review the score.");
       return;
@@ -194,11 +197,29 @@ export function AgentDetailView({ onError }: Props) {
     );
     markAnalyzing(queued.map(rowKey), true);
 
-    const results: Array<{ callId: number; ok: true } | { callId: number; ok: false; message: string }> = [];
+    const results: Array<
+      | { callId: number; recordingId: number; ok: true; needsTranscriptReview?: boolean }
+      | { callId: number; ok: false; message: string }
+    > = [];
     for (const row of queued) {
       try {
-        await analyzeDbRecording(row.callId, row.recordingId);
-        results.push({ callId: row.callId, ok: true });
+        const data = await analyzeDbRecording(row.callId, row.recordingId);
+        const needsReview = data.recording.analysisStatus === "awaiting_transcript_review";
+        results.push({
+          callId: row.callId,
+          recordingId: row.recordingId,
+          ok: true,
+          needsTranscriptReview: needsReview,
+        });
+        if (needsReview && queued.length === 1) {
+          markAnalyzing(queued.map(rowKey), false);
+          setBatchNotice(
+            `Call ${row.callId}: AssemblyAI and Whisper disagree on the transcript (similarity below threshold). Confirm the transcript to finish scoring.`,
+          );
+          navigate(`/recordings/${row.callId}/${row.recordingId}`);
+          await refresh(page);
+          return;
+        }
       } catch (err) {
         results.push({
           callId: row.callId,
@@ -214,12 +235,21 @@ export function AgentDetailView({ onError }: Props) {
 
     const failed = results.filter((item) => !item.ok);
     const done = results.filter((item) => item.ok);
+    const reviewNeeded = done.filter((item) => item.needsTranscriptReview);
     if (failed.length === 0) {
-      setBatchNotice(
-        done.length === 1
-          ? `Call ${done[0].callId} analyzed. The call score is on the row.`
-          : `${done.length} calls analyzed. Call scores are on the table.`,
-      );
+      if (reviewNeeded.length > 0) {
+        setBatchNotice(
+          reviewNeeded.length === 1
+            ? `Call ${reviewNeeded[0].callId} needs transcript review before scores run. Open the call and confirm AssemblyAI or Whisper.`
+            : `${reviewNeeded.length} calls need transcript review. Open each call from the table (Review transcript).`,
+        );
+      } else {
+        setBatchNotice(
+          done.length === 1
+            ? `Call ${done[0].callId} analyzed. The call score is on the row.`
+            : `${done.length} calls analyzed. Call scores are on the table.`,
+        );
+      }
       return;
     }
 
@@ -237,7 +267,7 @@ export function AgentDetailView({ onError }: Props) {
   }
 
   async function handleAnalyze(rec: AgentRecordingRow) {
-    if (rec.analysisStatus === "completed") {
+    if (rec.analysisStatus === "completed" || rec.analysisStatus === "awaiting_transcript_review") {
       navigate(`/recordings/${rec.callId}/${rec.recordingId}`);
       return;
     }
@@ -294,6 +324,7 @@ export function AgentDetailView({ onError }: Props) {
         overallScore={summary?.averageOverallScore ?? null}
         talkYou={summary?.averageAgentTalkRatioPct ?? 0}
         talkCustomer={summary?.averageCustomerTalkRatioPct ?? 0}
+        introductionScriptScore={summary?.averageIntroductionScore ?? null}
         avgResponseTimeSec={summary?.averageResponseTimeSec ?? null}
         silenceRatioPct={summary?.averageSilenceRatioPct ?? null}
         silenceSec={summary?.averageSilenceSec ?? null}
@@ -410,7 +441,7 @@ export function AgentDetailView({ onError }: Props) {
         <div className="filter-panel-footer">
           <CheckboxField
             id="agent-hide-vm"
-            label={`Hide voicemails (connected calls only, ≤${voicemailMaxSec}s fallback)`}
+            label={`Hide voicemails & bot-only (keeps Bot → Agent connects, ≤${voicemailMaxSec}s fallback)`}
             checked={excludeVoicemail}
             onChange={(e) => setExcludeVoicemail(e.target.checked)}
           />
@@ -495,7 +526,7 @@ export function AgentDetailView({ onError }: Props) {
                 <th>Answered</th>
                 <th>Direction</th>
                 <th>Duration</th>
-                <th>Talk</th>
+                <th>Talk / script</th>
                 <th>Speech rate</th>
                 <th>Disposition</th>
                 <th>Status</th>
@@ -567,11 +598,28 @@ export function AgentDetailView({ onError }: Props) {
                       <span className={`badge ${rec.answered ? "ok" : "muted"}`}>
                         {rec.answered ? "Answered" : "Not answered"}
                       </span>
+                      {rec.botHandling === "bot_transferred" ? (
+                        <span
+                          className="badge muted"
+                          style={{ marginLeft: 6 }}
+                          title="Bot spoke, then transferred to this agent"
+                        >
+                          Bot → Agent
+                        </span>
+                      ) : null}
                     </td>
                     <td className="capitalize">{rec.direction || "—"}</td>
                     <td>{rec.durationSec != null ? formatDurationLong(rec.durationSec) : "—"}</td>
                     <td>
-                      {rec.talkPercentage != null ? `${rec.talkPercentage.toFixed(0)}%` : "—"}
+                      {rec.talkPercentage != null ? `${rec.talkPercentage.toFixed(0)}% talk` : "—"}
+                      {rec.introductionScore != null ? (
+                        <div className="muted-inline">
+                          Script {Math.round(rec.introductionScore)}
+                          {rec.introductionRank ? ` · ${rec.introductionRank}` : ""}
+                        </div>
+                      ) : rec.analysisStatus === "completed" ? (
+                        <div className="muted-inline">Script —</div>
+                      ) : null}
                       {rec.interruptionCount != null ? (
                         <div className="muted-inline">{rec.interruptionCount} interruptions</div>
                       ) : null}
@@ -600,11 +648,15 @@ export function AgentDetailView({ onError }: Props) {
                       >
                         {rec.analysisStatus === "completed"
                           ? "Analyzed"
-                          : rec.analysisStatus === "failed"
-                            ? "Failed"
-                            : rec.analysisStatus === "running" || rec.analysisStatus === "queued"
-                              ? "Analyzing"
-                              : "Needs analysis"}
+                          : rec.analysisStatus === "awaiting_transcript_review"
+                            ? "Review transcript"
+                            : rec.analysisStatus === "failed"
+                              ? "Failed"
+                              : rec.analysisStatus === "running" ||
+                                  rec.analysisStatus === "transcribing" ||
+                                  rec.analysisStatus === "queued"
+                                ? "Analyzing"
+                                : "Needs analysis"}
                       </span>
                     </td>
                     <td>
@@ -627,7 +679,9 @@ export function AgentDetailView({ onError }: Props) {
                           ? "Analyzing…"
                           : rec.analysisStatus === "completed"
                             ? "Open"
-                            : "Analyze"}
+                            : rec.analysisStatus === "awaiting_transcript_review"
+                              ? "Review"
+                              : "Analyze"}
                       </button>
                     </td>
                   </tr>

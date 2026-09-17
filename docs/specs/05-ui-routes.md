@@ -45,7 +45,7 @@ Frontend: `http://127.0.0.1:5173` (Vite).
 **Filters:**
 
 - Quarter selector
-- Hide voicemails (connected only, ≤30s rule)
+- Hide voicemails (connected only, ≤40s rule)
 - Appointment generated (AG)
 - Date range, status, duration, search
 

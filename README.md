@@ -18,10 +18,11 @@ Before changing behaviour: read the relevant `docs/specs/features/F*.md`, implem
 
 1. Sync calls from Freshcaller (export → poll job → download ZIP → index recordings)
 2. Normalize audio (Node worker threads + ffmpeg → 16 kHz mono)
-3. AssemblyAI speech-to-text + speaker diarization + LLM sentiment
-4. Call metrics: quality, fluency, energy, response time, silence, interruptions, overtalk
-5. AI extraction (topics, tags, key moments, outcome) via AssemblyAI LLM Gateway
-6. Call Details dashboard: KPIs, charts, transcript
+3. Dual STT (optional): AssemblyAI + local Whisper compare; human confirm when they disagree (F08)
+4. AssemblyAI speech-to-text + speaker diarization + LLM sentiment
+5. Call metrics: quality, fluency, energy, response time, silence, interruptions, overtalk
+6. AI extraction (topics, tags, key moments, outcome) via AssemblyAI LLM Gateway
+7. Call Details dashboard: KPIs, charts, transcript
 
 ## Setup
 
@@ -105,3 +106,6 @@ npm run import:recordings -- --metadata-only
 # test with first 5 recordings
 npm run import:recordings -- --limit 5
 ```
+# Rerun the script for the introduction
+cd backend
+npx tsx scripts/backfill-introduction-script.ts

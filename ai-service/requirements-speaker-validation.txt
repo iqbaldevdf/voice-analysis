@@ -1,0 +1,19 @@
+# Optional deps for AUDIO_SPEAKER_VALIDATION=true
+# Install into the AI service venv AFTER checking Python/OS compatibility.
+# Prefer CPU wheels on this project (no GPU in typical VoiceIQ host):
+#
+#   pip install torch==2.5.1+cpu torchaudio==2.5.1+cpu --index-url https://download.pytorch.org/whl/cpu
+#   pip install speechbrain==1.0.2 soundfile requests
+#
+# Then download the ECAPA checkpoint once:
+#   speechbrain/spkrec-ecapa-voxceleb → embedding_model.ckpt into SPEAKER_EMBEDDING_MODEL_DIR
+#   (default: ai-service/.cache/speechbrain-ecapa/)
+#
+# Licensing: SpeechBrain Apache-2.0; ECAPA VoxCeleb pretrained weights — review upstream license
+# before redistributing models in your deployment artifact.
+#
+# Do NOT pin "latest" torch blindly; verify cp312 / Windows or Linux wheel availability first.
+speechbrain==1.0.2
+soundfile>=0.12.1
+requests>=2.31.0
+# torch / torchaudio: install CPU build separately (see commands above)

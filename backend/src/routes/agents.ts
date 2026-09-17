@@ -13,6 +13,7 @@ import {
   recordingCallDate,
   summarizeAgentQuarterStats,
 } from "../scoring/agentQuarter.js";
+import { fillMissingIntroductionScripts } from "../scoring/fillIntroductionScript.js";
 import { fillMissingPerformanceScores } from "../scoring/fillPerformanceScore.js";
 import {
   isAnsweredCall,
@@ -38,6 +39,7 @@ type AgentRecordingDoc = Pick<
   | "analysisResult"
   | "isConnected"
   | "isVoicemail"
+  | "botHandling"
   | "disposition"
 >;
 
@@ -85,6 +87,8 @@ function toAgentRow(doc: AgentRecordingDoc) {
     scoreNote: scoreNoteFor(agentPerf),
     introductionScore: intro?.score ?? null,
     introductionRank: intro?.rank ?? null,
+    botHandling: doc.botHandling ?? "none",
+    isBotInvolved: doc.botHandling != null && doc.botHandling !== "none",
     categoryScores,
   };
 }
@@ -200,6 +204,7 @@ export function createAgentsRouter(): Router {
             disposition: 1,
             isConnected: 1,
             isVoicemail: 1,
+            botHandling: 1,
             callNotes: 1,
           })
           .toArray()) as Array<AgentRecordingDoc & { agentId?: string }>;
@@ -301,11 +306,13 @@ export function createAgentsRouter(): Router {
           analysisResult: 1,
           isConnected: 1,
           isVoicemail: 1,
+          botHandling: 1,
           disposition: 1,
         })
         .toArray()) as AgentRecordingDoc[];
 
       await fillMissingPerformanceScores(docs);
+      await fillMissingIntroductionScripts(docs);
 
       const quarterDocs = docs.filter(
         (doc) => inQuarter(recordingCallDate(doc), quarter) && !isForwardedMailCall(doc),
@@ -333,6 +340,7 @@ export function createAgentsRouter(): Router {
         }
       }
 
+      // Hide voicemails / short / bot-only; always keep bot→agent transfers on the agent table.
       const tableSource = excludeVoicemail
         ? scoreDocs
         : appointmentOnly
