@@ -876,7 +876,11 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
               }.${botTaggedCount > 0 ? ` ${botTaggedCount} transcript line(s) tagged as Bot.` : ""}`
             : job.botHandling === "bot_only"
               ? "Freshcaller marked this call as bot-handled with no human agent connect."
-              : "Bot involvement detected on this call. Bot lines are tagged in the transcript."}
+              : result?.bot_segment?.handling === "bot_only"
+                ? `This recording looks like an automated / IVR bot (not ${agentName}).${
+                    botTaggedCount > 0 ? ` ${botTaggedCount} transcript line(s) tagged as Bot.` : ""
+                  }`
+                : "Bot involvement detected on this call. Bot lines are tagged in the transcript."}
         </div>
       ) : null}
 

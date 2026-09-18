@@ -1,5 +1,7 @@
-# Optional deps for AUDIO_SPEAKER_VALIDATION=true
+# Required deps for F07 Stage 3b ECAPA speaker validation (default ON for /analyze).
 # Install into the AI service venv AFTER checking Python/OS compatibility.
+#
+# --- Backend A: SpeechBrain ECAPA (default SPEAKER_EMBEDDING_BACKEND=speechbrain) ---
 # Prefer CPU wheels on this project (no GPU in typical VoiceIQ host):
 #
 #   pip install torch==2.5.1+cpu torchaudio==2.5.1+cpu --index-url https://download.pytorch.org/whl/cpu
@@ -9,11 +11,24 @@
 #   speechbrain/spkrec-ecapa-voxceleb → embedding_model.ckpt into SPEAKER_EMBEDDING_MODEL_DIR
 #   (default: ai-service/.cache/speechbrain-ecapa/)
 #
-# Licensing: SpeechBrain Apache-2.0; ECAPA VoxCeleb pretrained weights — review upstream license
-# before redistributing models in your deployment artifact.
+# Analyze fails if AUDIO_SPEAKER_VALIDATION=true (default) and this stack is missing.
+# Emergency only: set AUDIO_SPEAKER_VALIDATION=false
+#
+# --- Backend B: NVIDIA NeMo ECAPA (SPEAKER_EMBEDDING_BACKEND=nemo) — ADR 002 ---
+# Heavy install; use a dedicated venv if needed. CPU OK for spike; GPU optional.
+#
+#   pip install "nemo_toolkit[asr]"
+#   set SPEAKER_EMBEDDING_BACKEND=nemo
+#   python scripts/smoke_ecapa_backend.py path\to\normalized.wav
+#
+# Model: NGC ecapa_tdnn via EncDecSpeakerLabelModel.from_pretrained(model_name='ecapa_tdnn')
+# https://catalog.ngc.nvidia.com/orgs/nvidia/nemo/models/ecapa_tdnn
+#
+# Licensing: SpeechBrain Apache-2.0; NeMo / NGC — review upstream license before redistributing.
 #
 # Do NOT pin "latest" torch blindly; verify cp312 / Windows or Linux wheel availability first.
 speechbrain==1.0.2
 soundfile>=0.12.1
 requests>=2.31.0
 # torch / torchaudio: install CPU build separately (see commands above)
+# nemo_toolkit[asr]: optional; install only for SPEAKER_EMBEDDING_BACKEND=nemo

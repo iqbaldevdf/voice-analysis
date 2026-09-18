@@ -52,7 +52,12 @@ EmbedFn = Callable[[float, float], np.ndarray]
 
 
 def audio_speaker_validation_enabled() -> bool:
-    return os.getenv("AUDIO_SPEAKER_VALIDATION", "false").lower() in {"1", "true", "yes"}
+    """Stage 3b ECAPA validation — required on analyze by default (emergency off: false)."""
+    return os.getenv("AUDIO_SPEAKER_VALIDATION", "true").lower() in {"1", "true", "yes"}
+
+
+class EcapaUnavailableError(RuntimeError):
+    """Raised when ECAPA is required but dependencies/checkpoint are missing."""
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -1090,7 +1095,7 @@ def maybe_validate_speakers(
     encoder: SpeakerEncoder | None = None,
     embed_fn: EmbedFn | None = None,
 ) -> tuple[list[DiarizedUtterance], list[DiarizedWord], SpeakerValidationSummary]:
-    """Feature-flagged entry point. Safe no-op when disabled or unavailable."""
+    """Run Stage 3b when enabled (default on). Soft no-op only when disabled or skip=True."""
     if skip or not audio_speaker_validation_enabled():
         return (
             utterances,
@@ -1108,14 +1113,12 @@ def maybe_validate_speakers(
             ),
         )
     if embed_fn is None and encoder is None and not ecapa_available():
-        return (
-            utterances,
-            words,
-            SpeakerValidationSummary(
-                enabled=True,
-                status="skipped",
-                notes=["ECAPA dependencies/checkpoint unavailable; acoustic validation skipped."],
-            ),
+        backend = (os.getenv("SPEAKER_EMBEDDING_BACKEND") or "speechbrain").strip().lower()
+        raise EcapaUnavailableError(
+            "ECAPA speaker validation is required but unavailable. "
+            f"Backend={backend}. Install torch + speechbrain + embedding_model.ckpt "
+            "(see ai-service/requirements-speaker-validation.txt), "
+            "or set AUDIO_SPEAKER_VALIDATION=false only for emergency debugging."
         )
     try:
         return validate_speakers_audio(
@@ -1126,7 +1129,9 @@ def maybe_validate_speakers(
             embed_fn=embed_fn,
             recording_id=recording_id,
         )
-    except Exception as exc:  # noqa: BLE001 — never fail the analyze pipeline
+    except EcapaUnavailableError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — prefer uncertain over failing analyze mid-validation
         logger.exception("[AUDIO_DIARIZATION] validation failed: %s", exc)
         return (
             utterances,

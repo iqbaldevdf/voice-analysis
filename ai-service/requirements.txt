@@ -7,5 +7,6 @@ python-dotenv>=1.0.1
 jiwer>=3.0.0
 faster-whisper>=1.1.0
 
-# Optional: audio speaker validation (F07 Stage 3b) — see requirements-speaker-validation.txt
-# Enable with AUDIO_SPEAKER_VALIDATION=true after installing torch CPU + speechbrain + ECAPA checkpoint.
+# Required for analyze (F07 Stage 3b ECAPA): see requirements-speaker-validation.txt
+# Install torch CPU + speechbrain + embedding_model.ckpt before running /analyze.
+# Emergency disable: AUDIO_SPEAKER_VALIDATION=false

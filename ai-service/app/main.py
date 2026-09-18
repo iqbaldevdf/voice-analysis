@@ -90,8 +90,12 @@ def health() -> dict:
         ),
         "dual_stt_enabled": dual_stt_enabled(),
         "whisper_model": os.getenv("WHISPER_MODEL", "small.en"),
-        "audio_speaker_validation": os.getenv("AUDIO_SPEAKER_VALIDATION", "false").lower()
+        "audio_speaker_validation": os.getenv("AUDIO_SPEAKER_VALIDATION", "true").lower()
         in {"1", "true", "yes"},
+        "speaker_embedding_backend": (os.getenv("SPEAKER_EMBEDDING_BACKEND") or "speechbrain")
+        .strip()
+        .lower()
+        or "speechbrain",
     }
 
 

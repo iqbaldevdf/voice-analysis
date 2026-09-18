@@ -54,12 +54,17 @@ flowchart LR
 ```
 recording in Mongo
   → ensure local audio (download if needed)
-  → ffmpeg normalize (worker thread)
+  → ffmpeg normalize (worker thread) → 16 kHz mono
   → POST ai-service /analyze
+      → AssemblyAI STT + diarization (A/B)
+      → ECAPA Stage 3b speaker validation (required; SpeechBrain default)
+      → map speakers → Agent/Customer (+ bot tags when applicable)
+      → LLM + analytics/scoring
   → store analysisResult, analysisStatus=completed
   → refresh agent stats + listing projection
 ```
 
+Emergency: set `AUDIO_SPEAKER_VALIDATION=false` on the AI service to skip Stage 3b.
 ## Timezone
 
 - **Business calendar**: Asia/Kolkata for call dates, quarters, cron.

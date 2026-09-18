@@ -23,7 +23,7 @@ Freshcaller metadata
         ↓
    word/temporal diarization heuristics (suspicious islands)
         ↓
-   AUDIO-BASED SPEAKER VALIDATION (optional; ECAPA embeddings)
+   AUDIO-BASED SPEAKER VALIDATION (required on analyze; ECAPA embeddings)
         ↓
    validated A/B transcript (originalSpeaker preserved)
         ↓
@@ -110,12 +110,14 @@ Normalized in-memory (and optionally persisted) structure:
 - Preserve original diarization speaker id (`speaker_raw`) if labels are rewritten later
 - Empty utterances dropped
 
-### Stage 3b — Audio-based speaker validation (optional)
+### Stage 3b — Audio-based speaker validation (required on analyze)
 
-**Flag:** `AUDIO_SPEAKER_VALIDATION` (default `false`).
+**Flag:** `AUDIO_SPEAKER_VALIDATION` (default `true`). Set `false` only for emergency debugging.
 
 **Module:** `ai-service/app/pipeline/audio_speaker_validation.py`  
-**Embeddings:** SpeechBrain ECAPA-TDNN (`speechbrain/spkrec-ecapa-voxceleb`), CPU; optional deps in `requirements-speaker-validation.txt`.
+**Embeddings:** SpeechBrain ECAPA-TDNN (`speechbrain/spkrec-ecapa-voxceleb`) by default, or NVIDIA NeMo ECAPA (`ecapa_tdnn`) when `SPEAKER_EMBEDDING_BACKEND=nemo` (ADR 002). CPU; install via `requirements-speaker-validation.txt`.
+
+**Rule:** Normal `POST /analyze` and dual-STT finalize **must** run Stage 3b when the flag is on. If ECAPA deps/checkpoint are missing, analyze **fails** with a clear error (not a silent skip). `remapOnly` / `swapSpeakers` still skip acoustic validation.
 
 **Behaviour (Phase 2 + Phase 3):**
 
@@ -131,9 +133,9 @@ Normalized in-memory (and optionally persisted) structure:
 10. Resample an inference **copy** to 16 kHz when needed; original recording unchanged.
 11. `remapOnly` / `swapSpeakers` **must not** re-run acoustic validation.
 
-**Phase 4 evaluation (offline, not product UX):** Gold labels are physical `A`/`B` only (not Agent/Customer). Dataset: `ai-service/eval/gold/`. Labeling UI: `scripts/gold_label_server.py` (local). Harness: `scripts/evaluate_audio_diarization.py` → `eval/DIARIZATION_EVAL_REPORT.md`. Metrics require manual `goldSpeaker`; do not enable production until false-correction rate is acceptable on labeled data.
+**Phase 4 evaluation (offline, not product UX):** Gold labels are physical `A`/`B` only (not Agent/Customer). Dataset: `ai-service/eval/gold/`. Labeling UI: `scripts/gold_label_server.py` (local). Harness: `scripts/evaluate_audio_diarization.py` → `eval/DIARIZATION_EVAL_REPORT.md`. Metrics guide threshold tuning and backend comparison; Stage 3b remains on by default regardless of eval progress.
 
-**Phase 5 (planned):** Optional NVIDIA NeMo ECAPA backend A/B vs SpeechBrain — see [ADR 002](../decisions/002-nvidia-ecapa-spike-plan.md). Embedding swap only; not transcription.
+**Phase 5 (pluggable backend):** `SPEAKER_EMBEDDING_BACKEND=speechbrain|nemo` selects the Stage 3b encoder (`speaker_embeddings.py`). NVIDIA NeMo ECAPA spike plan: [ADR 002](../decisions/002-nvidia-ecapa-spike-plan.md). Smoke: `scripts/smoke_ecapa_backend.py`. Production default: `AUDIO_SPEAKER_VALIDATION=true` (SpeechBrain); set `false` only as an emergency kill switch.
 
 **Recording-level audit:** `analysisResult.speaker_validation` including `profile_status`, `profile_quality`, `profile_separation`, `islands_checked`, `boundaries_checked`, `boundary_corrections`, `missed_boundary_candidates`, `timing_ms`, cache hits/misses.
 ### Stage 4 — Speaker mapping
@@ -263,14 +265,14 @@ Add to `recording.analysisResult` (summary; full shape in `03-data-model.md` whe
 - [x] AC6: Introduction script and performance use mapped agent speaker, not talk-time-only guess.
 - [x] AC7: Low-confidence mapping shows a visible note on call detail (no silent wrong attribution).
 - [x] AC8: Re-analyze existing calls produces new mapping fields; STT can be skipped when `transcript_id` + utterances cached (`POST /remap-speakers`, `remapOnly` on analyze).
-- [x] AC9: Optional audio speaker validation runs after AssemblyAI diarization and before `map_speakers` when `AUDIO_SPEAKER_VALIDATION=true`.
+- [x] AC9: Audio speaker validation runs after AssemblyAI diarization and before `map_speakers` on normal analyze when `AUDIO_SPEAKER_VALIDATION=true` (default); missing ECAPA fails analyze.
 - [x] AC10: Original AssemblyAI speaker labels are preserved for audit (`speaker_raw` / `original_speaker`); corrections use similarity scores, not claimed probabilities.
 - [x] AC11: `remapOnly` / `swapSpeakers` do not re-run acoustic validation.
 - [x] AC12: End users are not prompted to verify speaker labels or confidence scores; validation is automatic when enabled.
 - [x] AC13: Robust profiles reject within-speaker acoustic outliers; auto-correct requires usable A/B profiles and adequate separation.
 - [x] AC14: Boundary validation can reassign words near A↔B transitions only with strong acoustic margin; word timestamps unchanged except speaker label.
 - [x] AC15: Long-turn missed-boundary scan is independently flaggable and does not auto-correct by default.
-- [x] AC16: Offline Phase 4 gold format + eval harness exist (`eval/gold/`, `scripts/evaluate_audio_diarization.py`); production `AUDIO_SPEAKER_VALIDATION` remains default `false` until labeled metrics justify enablement.
+- [x] AC16: Offline Phase 4 gold format + eval harness exist (`eval/gold/`, `scripts/evaluate_audio_diarization.py`); harness may force backends independently of the production default-on flag.
 ---
 
 ## Implementation phases

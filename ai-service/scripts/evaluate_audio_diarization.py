@@ -18,7 +18,7 @@ Usage (from ai-service/):
 Or evaluate templates after labeling:
   python scripts/evaluate_audio_diarization.py --gold eval/gold/templates/9002261_5348624.jsonl
 
-Production default AUDIO_SPEAKER_VALIDATION=false must remain unchanged in .env.
+Production default AUDIO_SPEAKER_VALIDATION=true (Stage 3b required). Eval can force backends via SPEAKER_EMBEDDING_BACKEND without changing that product rule.
 """
 
 from __future__ import annotations
@@ -394,7 +394,10 @@ def write_report(
         _append_runtime_smoke(lines, meta)
         lines.append("### Production flag")
         lines.append("")
-        lines.append("`AUDIO_SPEAKER_VALIDATION` must remain **false** in production `.env` until gold metrics justify enabling it.")
+        lines.append(
+            "`AUDIO_SPEAKER_VALIDATION` defaults to **true** (Stage 3b required on analyze). "
+            "Set `false` only as an emergency kill switch. Use this harness to tune thresholds / compare backends."
+        )
         lines.append("")
         lines.append("### Recommended thresholds")
         lines.append("")
@@ -492,17 +495,17 @@ def write_report(
     if metrics.false_correction == 0 and metrics.correct_correction > 0 and (precision or 0) >= 0.9:
         lines.append(
             "Measured results show useful corrections with zero false corrections on this gold set. "
-            "Still keep production default false until a larger set (15–30 calls) confirms."
+            "Production Stage 3b stays ON; expand gold (15–30 calls) before tightening thresholds."
         )
     elif metrics.n > 0 and metrics.false_correction > 0:
         lines.append(
-            f"**Do not enable** `AUDIO_SPEAKER_VALIDATION` in production: "
-            f"{metrics.false_correction} false correction(s) observed."
+            f"**Caution:** {metrics.false_correction} false correction(s) observed on gold. "
+            "Keep Stage 3b ON but prefer UNCERTAIN / raise margins; emergency off only if ops need a stopgap."
         )
     else:
         lines.append(
             "Insufficient evidence of improvement (no/low correct corrections). "
-            "Keep `AUDIO_SPEAKER_VALIDATION=false`."
+            "Keep production defaults; continue labeling before threshold changes."
         )
     lines.append("")
     lines.append(f"(Accuracy floats: AAI={aai_acc:.4f} P2={p2_acc:.4f} P3={p3_acc:.4f} FCR={fcr:.4f})")

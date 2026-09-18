@@ -34,7 +34,8 @@ Additional signals (when present):
 4. `bot_transferred` **is** a connect when F06 duration/voicemail rules pass; store flag and show UI badge **Bot → Agent**. Agent dashboard (F03) includes these rows when “Hide voicemails” is on.
 5. Stored `callStatus` prefers human connected status (1/15) when present; otherwise 19 if bot; otherwise first known status.
 6. Bot→agent is also inferred when a **human Agent participant** is present with a bot signal, even if `call_status` stays **19** (common after transfer).
-7. Out of scope (v1): trimming bot intro from audio/transcript; IVR detection without Freshcaller signals.
+7. Out of scope (v1 sync): trimming bot intro from audio/transcript.
+8. **Phase 3:** When Freshcaller has no bot signal, analyze may still tag IVR/AI turns as `role=bot` from transcript script cues (`bot_segment.method=script_inferred`). This does **not** rewrite sync `botHandling` / connect KPIs.
 
 ## Acceptance criteria (Phase 1 — call classification)
 
@@ -54,6 +55,14 @@ Additional signals (when present):
 - [x] AC10: `analysisResult.bot_segment` records handling, handoff_sec (when found), method, and tagged count.
 - [x] AC11: Introduction script scoring excludes bot-tagged turns.
 - [x] AC12: Timeline legend includes Bot color when bot involvement is present.
+
+## Acceptance criteria (Phase 3 — script-inferred Bot tags)
+
+- [x] AC13: When Freshcaller `botHandling=none` but the transcript matches IVR/AI script cues (menus, “press 1”, “leave a message”, “record your name”, “virtual assistant”, monitored/recorded legalese, etc.), those turns are tagged `role=bot` with label **Bot** (not the live agent name).
+- [x] AC14: Full single-speaker IVR monologues set `bot_segment.handling=bot_only`, `method=script_inferred`, and update the speaker role map to `bot`.
+- [x] AC15: Opening IVR then human agent handoff without Freshcaller flag → `handling=bot_transferred`, handoff_sec set when possible.
+- [x] AC16: Normal human agent/customer calls without IVR cues are **not** tagged bot.
+- [x] AC17: Sync fields `botHandling` / `isBotInvolved` remain Freshcaller-only; script inference is analysis/`transcript_display` only.
 
 ## API touchpoints
 
@@ -161,7 +170,9 @@ Allow `role`: `agent` | `customer` | `bot` | `unknown` in `transcript_display` /
 | 2d | Handoff time + exclude bot turns from agent scores | 2c + gold samples |
 | 2e | Eval on 10–15 bot-transfer calls | Gold labels |
 
-**Do not:** Treat every first speaker as bot; invent bot tags when `botHandling=none`; replace AssemblyAI transcription.
+**Do not:** Treat every first speaker as bot; replace AssemblyAI transcription; rewrite sync `botHandling` from script alone.
+
+**Phase 3 (implemented):** IVR/AI script cues may set `role=bot` + `bot_segment.method=script_inferred` even when Freshcaller is `none` (see AC13–AC17).
 
 ---
 

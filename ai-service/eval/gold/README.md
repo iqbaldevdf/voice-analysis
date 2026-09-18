@@ -8,7 +8,7 @@ AssemblyAI vs Phase 2 (island) vs Phase 3 (ECAPA + boundary) diarization.
 - Label **physical speakers** `A` / `B` only — **not** Agent / Customer.
 - Do **not** copy AssemblyAI, ECAPA, or `map_speakers` as gold.
 - Listen to the audio and mark who actually spoke each segment.
-- Keep `AUDIO_SPEAKER_VALIDATION=false` in production while evaluating.
+- Eval harness can force backends independently; production analyze defaults Stage 3b ON (`AUDIO_SPEAKER_VALIDATION=true`).
 - `OVERLAP` / `UNCLEAR` / `SKIP` are allowed during labeling but are **excluded** from accuracy metrics (written to `excluded.jsonl`, never coerced to A/B).
 
 ## File layout
@@ -121,7 +121,7 @@ C:\va-ai\Scripts\python.exe scripts/evaluate_audio_diarization.py --gold eval/go
 ```
 
 Pipeline: human labels → `calls.jsonl` → evaluate AAI vs Phase2 vs Phase3 → false-correction analysis → threshold sweep → go/no-go.  
-Do **not** enable `AUDIO_SPEAKER_VALIDATION` until that go/no-go says so.
+Do **not** treat gold go/no-go as a reason to turn Stage 3b off in production — the product default is ON; use the emergency kill switch only for debugging.
 
 ## Reuse
 

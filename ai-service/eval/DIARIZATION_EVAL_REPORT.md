@@ -53,7 +53,7 @@ This verifies ECAPA ran; it does **not** prove accuracy without gold labels.
 
 ### Production flag
 
-`AUDIO_SPEAKER_VALIDATION` must remain **false** in production `.env` until gold metrics justify enabling it.
+`AUDIO_SPEAKER_VALIDATION` defaults to **true** (Stage 3b required on analyze). Set `false` only as an emergency kill switch. Eval harness may still force backends independently.
 
 ### Recommended thresholds
 

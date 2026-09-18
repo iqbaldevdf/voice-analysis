@@ -40,6 +40,6 @@ No full gold-labeled 15–30 call set yet. Do **not** change production margins 
 
 ## Recommended enablement
 
-1. Keep `AUDIO_SPEAKER_VALIDATION=false` until ops gold set exists.
+1. Production default is `AUDIO_SPEAKER_VALIDATION=true`; use emergency `false` only for local debugging without SpeechBrain.
 2. When enabling: `AUDIO_SV_BOUNDARY_VALIDATION=true`, `AUDIO_SV_LONG_TURN_SCAN=false`, `AUDIO_SV_LONG_TURN_VALIDATION=false`.
 3. Pass words through analyze/finalize so boundary validation can run.

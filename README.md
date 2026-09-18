@@ -10,6 +10,7 @@ Call recording intelligence powered by **AssemblyAI**, with optional **Freshcall
 | --- | --- |
 | [docs/specs/README.md](docs/specs/README.md) | Spec index, workflow, feature list |
 | [docs/Call-and-Agent-Performance.md](docs/Call-and-Agent-Performance.md) | Scoring formulas (canonical) |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment requirements for DevOps |
 | [AGENTS.md](AGENTS.md) | Instructions for AI coding agents |
 
 Before changing behaviour: read the relevant `docs/specs/features/F*.md`, implement, then update the spec.

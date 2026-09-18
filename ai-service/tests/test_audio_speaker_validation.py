@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from app.pipeline.audio_speaker_validation import (
+    EcapaUnavailableError,
     ValidationConfig,
+    audio_speaker_validation_enabled,
     decide_validation,
     find_speaker_islands,
     maybe_validate_speakers,
@@ -188,7 +191,13 @@ def test_end_to_end_correction_with_injected_embed(monkeypatch):
     )
 
 
-def test_maybe_validate_disabled_by_default():
+def test_maybe_validate_enabled_by_default(monkeypatch):
+    monkeypatch.delenv("AUDIO_SPEAKER_VALIDATION", raising=False)
+    assert audio_speaker_validation_enabled() is True
+
+
+def test_maybe_validate_emergency_off(monkeypatch):
+    monkeypatch.setenv("AUDIO_SPEAKER_VALIDATION", "false")
     utts = [_utt("A", 0, 1), _utt("B", 1, 2)]
     words: list[DiarizedWord] = []
     out_u, out_w, summary = maybe_validate_speakers(
@@ -200,6 +209,21 @@ def test_maybe_validate_disabled_by_default():
     assert summary.enabled is False
     assert summary.status == "disabled"
     assert out_u[0].speaker == "A"
+
+
+def test_maybe_validate_missing_ecapa_raises(monkeypatch):
+    monkeypatch.setenv("AUDIO_SPEAKER_VALIDATION", "true")
+    monkeypatch.setattr(
+        "app.pipeline.audio_speaker_validation.ecapa_available",
+        lambda: False,
+    )
+    with pytest.raises(EcapaUnavailableError, match="required but unavailable"):
+        maybe_validate_speakers(
+            audio_path="/tmp/x.wav",
+            utterances=[_utt("A", 0, 1), _utt("B", 1, 2)],
+            words=[],
+            skip=False,
+        )
 
 
 def test_remap_skip_flag_does_not_require_audio(monkeypatch):

@@ -1,13 +1,17 @@
 """Speaker embedding helpers for audio-based diarization validation (CPU).
 
-Uses SpeechBrain ECAPA-TDNN when available. Resamples an inference copy to 16 kHz;
-does not restore missing high-frequency content from 8 kHz telephony audio.
+Backends (env SPEAKER_EMBEDDING_BACKEND):
+  - speechbrain (default): SpeechBrain ECAPA-TDNN (spkrec-ecapa-voxceleb)
+  - nemo: NVIDIA NeMo ECAPA-TDNN (NGC ecapa_tdnn)
+
+Resamples an inference copy to 16 kHz; does not restore missing HF from 8 kHz telephony.
 """
 
 from __future__ import annotations
 
 import math
 import os
+import tempfile
 import wave
 from functools import lru_cache
 from pathlib import Path
@@ -60,10 +64,32 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
+def _l2_normalize(v: np.ndarray) -> np.ndarray:
+    out = v.astype(np.float32).reshape(-1)
+    return out / (np.linalg.norm(out) + 1e-8)
+
+
+def write_wav_mono_16bit(path: str | Path, audio: np.ndarray, sr: int) -> None:
+    clipped = np.clip(audio, -1.0, 1.0)
+    pcm = (clipped * 32767.0).astype(np.int16)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(int(sr))
+        wf.writeframes(pcm.tobytes())
+
+
 class SpeakerEncoder(Protocol):
     name: str
 
     def encode(self, seg: np.ndarray, sr: int) -> np.ndarray: ...
+
+
+def embedding_backend() -> str:
+    raw = (os.getenv("SPEAKER_EMBEDDING_BACKEND") or "speechbrain").strip().lower()
+    if raw in {"nemo", "nvidia", "nemo_ecapa", "ngc"}:
+        return "nemo"
+    return "speechbrain"
 
 
 class EcapaSpeakerEncoder:
@@ -111,8 +137,51 @@ class EcapaSpeakerEncoder:
             feats = self.compute_features(wav)
             feats = self.mean_var_norm(feats, wav_lens)
             emb = self.embedding_model(feats)
-        v = emb.squeeze().cpu().numpy().astype(np.float32).reshape(-1)
-        return v / (np.linalg.norm(v) + 1e-8)
+        return _l2_normalize(emb.squeeze().cpu().numpy())
+
+
+class NemoEcapaEncoder:
+    """NVIDIA NeMo ECAPA-TDNN embeddings (NGC ecapa_tdnn). Expects 16 kHz mono."""
+
+    name = "nemo_ecapa_tdnn"
+    target_sr = 16000
+
+    def __init__(self) -> None:
+        import nemo.collections.asr as nemo_asr
+
+        model_name = (os.getenv("NEMO_ECAPA_MODEL") or "ecapa_tdnn").strip() or "ecapa_tdnn"
+        self.model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(model_name=model_name)
+        self.model.eval()
+        # Prefer CPU for VoiceIQ hosts unless CUDA is explicitly available and requested.
+        prefer_gpu = (os.getenv("NEMO_ECAPA_DEVICE") or "cpu").strip().lower() == "cuda"
+        try:
+            import torch
+
+            if prefer_gpu and torch.cuda.is_available():
+                self.model = self.model.cuda()
+            else:
+                self.model = self.model.cpu()
+        except Exception:
+            pass
+
+    def encode(self, seg: np.ndarray, sr: int) -> np.ndarray:
+        if len(seg) < int(0.25 * sr):
+            return np.zeros(192, dtype=np.float32)
+        audio = resample_linear(seg, sr, self.target_sr)
+        # NeMo get_embedding is path-based across versions; use a short temp WAV.
+        fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            write_wav_mono_16bit(tmp_path, audio, self.target_sr)
+            emb = self.model.get_embedding(tmp_path)
+            if hasattr(emb, "detach"):
+                emb = emb.detach().cpu().numpy()
+            return _l2_normalize(np.asarray(emb, dtype=np.float32))
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def default_model_dir() -> Path:
@@ -122,15 +191,41 @@ def default_model_dir() -> Path:
     return Path(__file__).resolve().parents[2] / ".cache" / "speechbrain-ecapa"
 
 
-@lru_cache(maxsize=1)
-def get_ecapa_encoder() -> EcapaSpeakerEncoder:
-    return EcapaSpeakerEncoder(default_model_dir())
-
-
-def ecapa_available() -> bool:
+def speechbrain_available() -> bool:
     try:
         import torch  # noqa: F401
         import speechbrain  # noqa: F401
     except ImportError:
         return False
     return (default_model_dir() / "embedding_model.ckpt").is_file()
+
+
+def nemo_available() -> bool:
+    try:
+        import nemo.collections.asr  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def ecapa_available() -> bool:
+    """True when the configured SPEAKER_EMBEDDING_BACKEND can run."""
+    if embedding_backend() == "nemo":
+        return nemo_available()
+    return speechbrain_available()
+
+
+@lru_cache(maxsize=2)
+def _encoder_for(backend: str) -> SpeakerEncoder:
+    if backend == "nemo":
+        return NemoEcapaEncoder()
+    return EcapaSpeakerEncoder(default_model_dir())
+
+
+def get_ecapa_encoder() -> SpeakerEncoder:
+    """Return the encoder for SPEAKER_EMBEDDING_BACKEND (cached per backend name)."""
+    return _encoder_for(embedding_backend())
+
+
+def clear_encoder_cache() -> None:
+    _encoder_for.cache_clear()
