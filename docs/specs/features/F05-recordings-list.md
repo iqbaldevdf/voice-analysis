@@ -24,6 +24,7 @@ As a reviewer, I browse synced calls, filter noise, sort, and open or batch-anal
 - Pagination.
 - Select rows → Analyze selected.
 - Open row → call details.
+- **Unclear audio** badge when F10 `audioClarityFlag` is `caution` or `poor`.
 
 ## Acceptance criteria
 
@@ -31,6 +32,7 @@ As a reviewer, I browse synced calls, filter noise, sort, and open or batch-anal
 - [x] AC2: Hide voicemails removes ≤40s and voicemail rows.
 - [x] AC3: Analyze triggers POST analyze per call.
 - [x] AC4: Empty state when no data or filters too tight.
+- [x] AC5: Unclear audio badge when `audioClarityFlag` is caution or poor (F10).
 
 ## Implementation
 

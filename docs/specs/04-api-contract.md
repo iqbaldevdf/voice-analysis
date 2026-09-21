@@ -28,8 +28,6 @@ Prefix: **`/recordings/db`**
 | Param | Default | Description |
 | --- | --- | --- |
 | `excludeVoicemail` | `true` | Hide voicemails, calls ≤ 40s, and bot-only (`botHandling=bot_only`, F09) |
-
-List/detail items also include `botHandling` (`none` \| `bot_only` \| `bot_transferred`) and `isBotInvolved`.
 | `status` | all | `none`, `completed`, `running`, `failed` |
 | `dateFrom`, `dateTo` | — | Filter on `createdTime` |
 | `minDuration`, `maxDuration` | — | Seconds |
@@ -37,7 +35,7 @@ List/detail items also include `botHandling` (`none` \| `bot_only` \| `bot_trans
 | `sortBy`, `sortDir` | `createdTime`, `desc` | |
 | `page`, `limit` | 1, 10 | max limit 100 |
 
-Response includes `voicemailMaxSec: 40`.
+Response includes `voicemailMaxSec: 40`. List/detail items also include `botHandling` (`none` \| `bot_only` \| `bot_transferred`), `isBotInvolved`, and `audioClarityFlag` (`ok` \| `caution` \| `poor` \| null, F10).
 
 ## Agents
 

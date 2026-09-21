@@ -12,6 +12,8 @@ const CALL: Record<string, string> = {
   categoryBreakup:
     "Six behaviour scores in two groups of three (quarter averages). Turn taking is scored on calls but not shown here.",
   overallCalls: "Connected calls this quarter (IST). Voicemail and missed calls excluded.",
+  audioClarity:
+    "Recording reliability from ASR word confidence and clipping/quietness. Not an agent performance score.",
   callsAnalyzed: "Analyzed connects divided by total connects this quarter.",
   rosterOverallScore: "Average call-quality score across agents with at least one scored call.",
   appointments: "Calls with disposition set to Appointment this quarter.",

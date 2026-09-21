@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Cell,
   Pie,
@@ -36,6 +36,16 @@ import { IntroductionScriptPanel } from "../components/IntroductionScriptPanel";
 import { ParticipantPerformancePanel } from "../components/ParticipantPerformancePanel";
 import { SearchField, SelectField } from "../components/ui/Fields";
 import { callQualityParts } from "../lib/callQuality";
+import {
+  flagFromConfidences,
+  isUnclearAudio,
+  reasonLabel,
+  resolveSpeakerAudioClarity,
+  speakerClarityName,
+  utteranceWordParts,
+  worseAudioFlag,
+  type AudioClarityFlag,
+} from "../lib/audioClarity";
 import { agentDisplayName } from "../lib/agentInitials";
 import { DISPOSITION_OPTIONS, dispositionClass, dispositionLabel } from "../lib/disposition";
 
@@ -279,6 +289,21 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
   const topics = useMemo(() => normalizeTopics(extraction?.key_topics ?? []), [extraction]);
   const utterances = result?.utterances ?? [];
   const speakerMapping = result?.speaker_mapping;
+  const speakerClarity = useMemo(
+    () => resolveSpeakerAudioClarity(cq?.speaker_audio_clarity, result?.words, speakerMapping),
+    [cq?.speaker_audio_clarity, result?.words, speakerMapping],
+  );
+  const transcriptQualityFlag = useMemo((): AudioClarityFlag => {
+    const stored = cq?.audio_clarity_flag;
+    const fromSpeakers = worseAudioFlag(...speakerClarity.map((row) => row.flag));
+    if (stored === "ok" || stored === "caution" || stored === "poor") {
+      return worseAudioFlag(stored, fromSpeakers);
+    }
+    const confs = (result?.words ?? [])
+      .map((word) => word.confidence)
+      .filter((value): value is number => value != null);
+    return worseAudioFlag(fromSpeakers, flagFromConfidences(confs));
+  }, [cq?.audio_clarity_flag, speakerClarity, result?.words]);
   const speakerAssignment = speakerAssignmentSummary(speakerMapping, agentName, customerName);
   const labelsLookUncertain = Boolean(speakerMapping?.mapping_uncertain);
   const transcriptDisplayByKey = useMemo(() => {
@@ -1161,6 +1186,47 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
                 ) : null}
               </div>
             </div>
+            {isUnclearAudio(transcriptQualityFlag) ? (
+              <div
+                className={`audio-clarity-banner ${transcriptQualityFlag}`}
+                role="status"
+                title="Recording reliability — not agent performance"
+              >
+                <p className="audio-clarity-banner-title">
+                  Audio quality was not good — transcription may mismatch
+                </p>
+                <div className="audio-clarity-reasons">
+                  {speakerClarity.map((row) => (
+                    <span
+                      key={row.speaker}
+                      className={`audio-clarity-chip ${row.flag}`}
+                      title={
+                        row.avg_asr_confidence != null
+                          ? `${Math.round(row.avg_asr_confidence * 100)}% ASR confidence`
+                          : "Speaker audio quality"
+                      }
+                    >
+                      {speakerClarityName(row, agentName, customerName)}:{" "}
+                      {row.flag === "ok" ? "OK" : row.flag === "poor" ? "Poor" : "Caution"}
+                    </span>
+                  ))}
+                  {(cq?.audio_clarity_reasons ?? []).map((code) => (
+                    <span key={code} className="audio-clarity-chip">
+                      {reasonLabel(code)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : speakerClarity.length > 0 ? (
+              <div className="audio-clarity-reasons transcript-quality-tags" role="status">
+                {speakerClarity.map((row) => (
+                  <span key={row.speaker} className={`audio-clarity-chip ${row.flag}`}>
+                    {speakerClarityName(row, agentName, customerName)}:{" "}
+                    {row.flag === "ok" ? "OK" : row.flag === "poor" ? "Poor" : "Caution"}
+                  </span>
+                ))}
+              </div>
+            ) : null}
             {canReanalyze && labelsLookUncertain && speakerAssignment ? (
               <div className="speaker-fix-callout" role="region" aria-label="Speaker label review">
                 <p className="speaker-fix-callout-title">
@@ -1378,7 +1444,27 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
                       {sentimentEmoji(utt.sentiment)}
                     </span>
                   </div>
-                  <p className="bubble">{utt.text}</p>
+                  <p className="bubble">
+                    {utteranceWordParts(
+                      utt,
+                      result?.words,
+                      cq?.low_confidence_spans,
+                    ).map((part, partIdx) => (
+                      <Fragment key={`${utt.start}-${partIdx}`}>
+                        {partIdx > 0 ? " " : null}
+                        {part.low ? (
+                          <mark
+                            className="low-confidence-word"
+                            title="Low ASR confidence — this word may be wrong"
+                          >
+                            {part.text}
+                          </mark>
+                        ) : (
+                          part.text
+                        )}
+                      </Fragment>
+                    ))}
+                  </p>
                 </button>
               );
             })}

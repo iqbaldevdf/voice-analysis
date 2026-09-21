@@ -5,6 +5,7 @@ import { recordingsCollection, recordingListingsCollection, type RecordingDocume
 import { refreshAgentStats } from "../db/agents.js";
 import { isDisposition } from "../scoring/agentQuarter.js";
 import { toListingDoc, upsertRecordingListing } from "../db/recordingListings.js";
+import { audioClarityFlagFromResult, type AudioClarityFlag } from "../lib/audioClarity.js";
 import { fillMissingIntroductionScripts } from "../scoring/fillIntroductionScript.js";
 import { analyzeRecordingOnce, confirmTranscriptOnce } from "../services/analyzeRecording.js";
 import {
@@ -41,6 +42,7 @@ export type RecordingListItem = {
   disposition?: RecordingDocument["disposition"];
   analysisError?: string | null;
   analyzedAt?: Date | null;
+  audioClarityFlag?: AudioClarityFlag | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -87,6 +89,7 @@ function toListItem(doc: RecordingDocument): RecordingListItem {
     disposition: doc.disposition ?? null,
     analysisError: doc.analysisError,
     analyzedAt: doc.analyzedAt,
+    audioClarityFlag: audioClarityFlagFromResult(doc.analysisResult),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };

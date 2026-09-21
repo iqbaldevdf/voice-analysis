@@ -5,6 +5,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from app.pipeline.audio_clarity import assess_audio_clarity, assess_speakers_audio_clarity, worse_flag
 from app.schemas import (
     AiExtraction,
     CallQuality,
@@ -212,6 +213,7 @@ def build_call_analytics(
     sentiment_segments: list[SentimentSegment],
     avg_asr_confidence: float | None,
     role_hints: dict[str, str] | None = None,
+    audio_path: str | None = None,
 ) -> tuple[list[SpeakerMetrics], CallQuality, list[SentimentTimelinePoint]]:
     speakers = sorted({u.speaker for u in utterances}) or ["A"]
 
@@ -345,6 +347,30 @@ def build_call_analytics(
     elif agent_metric is not None:
         agent_wps = agent_metric.words_per_minute / 60
 
+    speaker_clarity = assess_speakers_audio_clarity(
+        words=words,
+        utterances=utterances,
+        role_hints=role_hints,
+        audio_path=audio_path,
+    )
+    clarity = assess_audio_clarity(
+        words=words,
+        utterances=utterances,
+        avg_asr_confidence=avg_asr_confidence,
+        silence_ratio_pct=silence_ratio,
+        audio_path=audio_path,
+        include_rms=False,
+    )
+    call_flag = worse_flag(clarity.flag, *(item.flag for item in speaker_clarity))
+    call_reasons = list(clarity.reasons)
+    if call_flag != "ok":
+        for item in speaker_clarity:
+            for code in item.reasons:
+                if code not in call_reasons:
+                    call_reasons.append(code)
+    if call_flag == "ok":
+        call_reasons = []
+
     call_quality = CallQuality(
         overall_score=round(overall, 1),
         recording_quality_score=round(recording_quality, 1),
@@ -364,6 +390,15 @@ def build_call_analytics(
         customer_disconnected=disconnected,
         disconnect_reason=disconnect_reason,
         disconnect_confidence=round(disconnect_confidence, 2),
+        audio_clarity_flag=call_flag,
+        audio_clarity_reasons=call_reasons,
+        avg_asr_confidence=clarity.avg_asr_confidence,
+        p10_asr_confidence=clarity.p10_asr_confidence,
+        low_confidence_word_pct=clarity.low_confidence_word_pct,
+        clipping_pct=clarity.clipping_pct,
+        rms=clarity.rms,
+        low_confidence_spans=clarity.low_confidence_spans,
+        speaker_audio_clarity=speaker_clarity,
     )
 
     timeline = build_sentiment_timeline(sentiment_segments, utterances, duration_sec)

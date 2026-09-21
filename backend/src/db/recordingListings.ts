@@ -1,6 +1,7 @@
 import type { RecordingDocument } from "./mongo.js";
 import { recordingListingsCollection } from "./mongo.js";
 import { isLikelyVoicemail } from "../voicemail.js";
+import { audioClarityFlagFromResult, type AudioClarityFlag } from "../lib/audioClarity.js";
 
 export type RecordingListingDoc = {
   callId: number;
@@ -29,6 +30,7 @@ export type RecordingListingDoc = {
   analysisStatus: RecordingDocument["analysisStatus"];
   analysisError?: string | null;
   analyzedAt?: Date | null;
+  audioClarityFlag?: AudioClarityFlag | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -67,6 +69,7 @@ export function toListingDoc(doc: RecordingDocument): RecordingListingDoc {
     analysisStatus: doc.analysisStatus,
     analysisError: doc.analysisError,
     analyzedAt: doc.analyzedAt,
+    audioClarityFlag: audioClarityFlagFromResult(doc.analysisResult),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };

@@ -75,6 +75,19 @@ export type CallQuality = {
   customer_disconnected: boolean;
   disconnect_reason?: string | null;
   disconnect_confidence: number;
+  audio_clarity_flag?: "ok" | "caution" | "poor" | null;
+  audio_clarity_reasons?: string[];
+  avg_asr_confidence?: number | null;
+  p10_asr_confidence?: number | null;
+  low_confidence_word_pct?: number | null;
+  clipping_pct?: number | null;
+  rms?: number | null;
+  low_confidence_spans?: Array<{
+    start: number;
+    end: number;
+    word: string;
+    confidence?: number | null;
+  }>;
 };
 
 export type TopicWeight = {

@@ -124,6 +124,25 @@ class SentimentTimelinePoint(BaseModel):
     label: Literal["POSITIVE", "NEUTRAL", "NEGATIVE"]
 
 
+class LowConfidenceSpan(BaseModel):
+    start: float
+    end: float
+    word: str
+    confidence: Optional[float] = None
+    speaker: Optional[str] = None
+
+
+class SpeakerAudioClarity(BaseModel):
+    speaker: str
+    role: Optional[str] = None
+    flag: Literal["ok", "caution", "poor"] = "ok"
+    reasons: list[str] = Field(default_factory=list)
+    avg_asr_confidence: Optional[float] = None
+    low_confidence_word_pct: Optional[float] = None
+    clipping_pct: Optional[float] = None
+    rms: Optional[float] = None
+
+
 class CallQuality(BaseModel):
     overall_score: float = Field(..., description="0-100 composite call quality")
     recording_quality_score: float = Field(..., description="0-100 from ASR confidence / clarity proxy")
@@ -143,6 +162,16 @@ class CallQuality(BaseModel):
     customer_disconnected: bool
     disconnect_reason: Optional[str] = None
     disconnect_confidence: float = 0.0
+    # F10 — recording reliability (does not change scoring formulas)
+    audio_clarity_flag: Optional[Literal["ok", "caution", "poor"]] = None
+    audio_clarity_reasons: list[str] = Field(default_factory=list)
+    avg_asr_confidence: Optional[float] = None
+    p10_asr_confidence: Optional[float] = None
+    low_confidence_word_pct: Optional[float] = None
+    clipping_pct: Optional[float] = None
+    rms: Optional[float] = None
+    low_confidence_spans: list[LowConfidenceSpan] = Field(default_factory=list)
+    speaker_audio_clarity: list[SpeakerAudioClarity] = Field(default_factory=list)
 
 
 class TopicWeight(BaseModel):

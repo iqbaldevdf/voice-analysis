@@ -15,6 +15,7 @@ import {
 } from "../scoring/agentQuarter.js";
 import { fillMissingIntroductionScripts } from "../scoring/fillIntroductionScript.js";
 import { fillMissingPerformanceScores } from "../scoring/fillPerformanceScore.js";
+import { audioClarityFlagFromResult } from "../lib/audioClarity.js";
 import {
   isAnsweredCall,
   isConnectedConversation,
@@ -89,6 +90,9 @@ function toAgentRow(doc: AgentRecordingDoc) {
     introductionRank: intro?.rank ?? null,
     botHandling: doc.botHandling ?? "none",
     isBotInvolved: doc.botHandling != null && doc.botHandling !== "none",
+    audioClarityFlag: audioClarityFlagFromResult(
+      doc.analysisStatus === "completed" ? doc.analysisResult : null,
+    ),
     categoryScores,
   };
 }

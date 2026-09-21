@@ -18,6 +18,7 @@ import { metricHelp } from "../lib/metricHelp";
 import { dispositionClass, dispositionLabel } from "../lib/disposition";
 import { agentDisplayName, agentInitials } from "../lib/agentInitials";
 import { wordsPerMinute } from "../lib/callQuality";
+import { UnclearAudioBadge } from "../components/UnclearAudioBadge";
 
 type Props = {
   onError: (message: string | null) => void;
@@ -658,6 +659,7 @@ export function AgentDetailView({ onError }: Props) {
                                 ? "Analyzing"
                                 : "Needs analysis"}
                       </span>
+                      <UnclearAudioBadge flag={rec.audioClarityFlag} />
                     </td>
                     <td>
                       <span className={`badge ${scoreTone(rec.callQualityScore ?? rec.overallScore)}`}>

@@ -219,7 +219,7 @@ All Gateway calls run **after** stages 4–5:
 
 Existing modules, fed mapped roles:
 
-- `build_call_analytics` → `speaker_metrics`, `call_quality`
+- `build_call_analytics` → `speaker_metrics`, `call_quality` (F10 audio-clarity flag attached here)
 - `score_introduction_script` → agent opening themes
 - `run_participant_performance` → seven-category agent score
 

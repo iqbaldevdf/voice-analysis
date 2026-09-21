@@ -494,7 +494,7 @@ app.post("/jobs/freshcaller", async (req, res) => {
 
 try {
   await connectMongo();
-  console.log(`MongoDB connected: ${getMongoUri()}`);
+  console.log(`MongoDB connected: ${getMongoUri().replace(/\/\/.*@/, "//***@")}`);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`MongoDB connection failed: ${message}`);

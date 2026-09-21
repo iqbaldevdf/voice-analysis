@@ -57,6 +57,8 @@ Frontend: `http://127.0.0.1:5173` (Vite).
 
 Sections: sentiment gauge, outcome panel (`Call Outcome` value + `Disposition` dropdown rows), recording player, transcript, performance panel, topics/tags.
 
+**Audio clarity (F10):** The Transcript panel shows a tag when audio is Caution/Poor: “Audio quality was not good — transcription may mismatch”, plus Agent/Customer chips. Low-confidence words stay highlighted. Recordings list shows **Unclear audio**.
+
 ## Disposition colours
 
 CSS classes: `disposition-hung_up`, `disposition-not_interested` (yellow), `disposition-appointment` (dark green), `disposition-follow_up` (light green), `disposition-dnc` (blue).

@@ -23,6 +23,7 @@ Terms used consistently across all VoiceIQ specs.
 | **Listing** | Lightweight Mongo projection (`recording_listings`) for fast tables without full analysis blob. |
 | **Speaker mapping** | Assigning diarization labels (`A`, `B`) to roles (`agent`, `customer`). See F07. |
 | **Speaker-aware transcript** | Transcript text labeled by role (and optionally name), built after mapping. See F07. |
+| **Audio clarity flag** | Recording reliability: `ok` / `caution` / `poor` from ASR word confidence and WAV clipping/quietness (F10). Not agent performance. |
 
 ## Disposition colour coding (UI)
 

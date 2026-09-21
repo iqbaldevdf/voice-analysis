@@ -91,6 +91,25 @@ export type SentimentTimelinePoint = {
 
 export type SalesDisposition = "hung_up" | "not_interested" | "appointment" | "follow_up" | "dnc";
 
+export type LowConfidenceSpan = {
+  start: number;
+  end: number;
+  word: string;
+  confidence?: number | null;
+  speaker?: string | null;
+};
+
+export type SpeakerAudioClarity = {
+  speaker: string;
+  role?: string | null;
+  flag: "ok" | "caution" | "poor";
+  reasons: string[];
+  avg_asr_confidence?: number | null;
+  low_confidence_word_pct?: number | null;
+  clipping_pct?: number | null;
+  rms?: number | null;
+};
+
 export type CallQuality = {
   overall_score: number;
   recording_quality_score: number;
@@ -110,6 +129,15 @@ export type CallQuality = {
   customer_disconnected: boolean;
   disconnect_reason?: string | null;
   disconnect_confidence: number;
+  audio_clarity_flag?: "ok" | "caution" | "poor" | null;
+  audio_clarity_reasons?: string[];
+  avg_asr_confidence?: number | null;
+  p10_asr_confidence?: number | null;
+  low_confidence_word_pct?: number | null;
+  clipping_pct?: number | null;
+  rms?: number | null;
+  low_confidence_spans?: LowConfidenceSpan[];
+  speaker_audio_clarity?: SpeakerAudioClarity[];
 };
 
 export type TopicWeight = {
@@ -511,6 +539,7 @@ export type DbRecordingListItem = {
   disposition?: SalesDisposition | null;
   analysisError?: string | null;
   analyzedAt?: string | null;
+  audioClarityFlag?: "ok" | "caution" | "poor" | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -901,6 +930,7 @@ export type AgentRecordingRow = {
   introductionRank?: string | null;
   botHandling?: "none" | "bot_only" | "bot_transferred";
   isBotInvolved?: boolean;
+  audioClarityFlag?: "ok" | "caution" | "poor" | null;
 };
 
 export type QuarterWindow = {

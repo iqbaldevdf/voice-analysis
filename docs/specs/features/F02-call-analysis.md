@@ -21,7 +21,7 @@ As a reviewer, I analyze a connect once and get transcript, scores, sentiment, a
 | Output | Used for |
 | --- | --- |
 | Transcript + diarization | UI, performance model |
-| `call_quality` | Call score, agent call quality card |
+| `call_quality` | Call score, agent call quality card; F10 audio-clarity flag is a warning only |
 | `participant_performance` | Agent performance score |
 | `llm_sentiment` | Sentiment panels (not KPI scores) |
 | `ai_extraction` | Summary, tags, **call_outcome** |

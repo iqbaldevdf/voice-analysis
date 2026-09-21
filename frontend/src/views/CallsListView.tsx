@@ -16,6 +16,7 @@ import {
   TextField,
 } from "../components/ui/Fields";
 import { agentDisplayName, agentInitials } from "../lib/agentInitials";
+import { UnclearAudioBadge } from "../components/UnclearAudioBadge";
 
 type Props = {
   mode: "meetings" | "recordings";
@@ -377,6 +378,7 @@ export function CallsListView({
                           Bot → Agent
                         </span>
                       ) : null}
+                      <UnclearAudioBadge flag={rec.audioClarityFlag} />
                     </div>
                     <p className="meeting-meta">
                       <span>FC-{rec.callId}</span>
@@ -520,6 +522,7 @@ export function CallsListView({
                         >
                           {analysisBadge(rec.analysisStatus)}
                         </span>
+                        <UnclearAudioBadge flag={rec.audioClarityFlag} />
                       </td>
                       <td>
                         <button

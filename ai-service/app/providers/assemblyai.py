@@ -623,6 +623,7 @@ Transcript excerpt:
             if avg_asr_confidence is not None
             else mean_or_none(confidences),
             role_hints=role_hints,
+            audio_path=audio_path,
         )
 
         transcript_preview = build_role_transcript_preview(

@@ -24,7 +24,7 @@ One document per Freshcaller call + recording pair.
 | `isBotInvolved` | boolean | True when botHandling ≠ `none` |
 | `disposition` | enum | `hung_up`, `not_interested`, `appointment`, `follow_up`, `dnc`, or null |
 | `analysisStatus` | enum | `none`, `queued`, `transcribing`, `running`, `awaiting_transcript_review`, `completed`, `failed` |
-| `analysisResult` | object | Full AI payload (large); may include `bot_segment` (F09) |
+| `analysisResult` | object | Full AI payload (large); may include `bot_segment` (F09) and F10 `call_quality.audio_clarity_*` |
 | `localPath` | string | Path to downloaded audio |
 | `recordingUrl` | string | Freshcaller URL |
 
@@ -32,7 +32,7 @@ One document per Freshcaller call + recording pair.
 
 ### `recording_listings` (projection)
 
-Same metadata as list views need; **no** `analysisResult`. Kept in sync on write.
+Same metadata as list views need; **no** `analysisResult`. Kept in sync on write. Includes `audioClarityFlag` (`ok` \| `caution` \| `poor` \| null) for the F10 list badge.
 
 ### `agents`
 
@@ -62,7 +62,7 @@ Stored under `recording.analysisResult`:
 
 | Section | Purpose |
 | --- | --- |
-| `call_quality` | clarity_score, speech_rate_score |
+| `call_quality` | clarity_score, speech_rate_score; F10: `audio_clarity_flag`, `speaker_audio_clarity[]`, `audio_clarity_reasons`, `avg_asr_confidence`, `low_confidence_word_pct`, `low_confidence_spans` |
 | `participant_performance[]` | Agent row with overallScore + category scores |
 | `speaker_metrics[]` | Talk time, words, WPM |
 | `llm_sentiment` | Trajectory, emotions, risk flags |

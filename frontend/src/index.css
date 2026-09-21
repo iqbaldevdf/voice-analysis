@@ -2402,16 +2402,16 @@ input[type="text"] {
 
 .transcript-head {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: end;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   margin-bottom: 8px;
 }
 
 .transcript-head-title {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
 }
@@ -2579,10 +2579,12 @@ input[type="text"] {
 
 .transcript-list {
   max-height: min(62vh, 640px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: grid;
   gap: 10px;
   padding-right: 4px;
+  min-width: 0;
 }
 
 .transcript-row {
@@ -2593,6 +2595,10 @@ input[type="text"] {
   background: transparent;
   border-radius: 12px;
   padding: 2px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  white-space: normal;
 }
 
 .transcript-row:hover .bubble,
@@ -2634,6 +2640,72 @@ input[type="text"] {
   border: 1px solid var(--line);
   background: #fafbfe;
   line-height: 1.55;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.low-confidence-word {
+  background: color-mix(in srgb, #c4a574 18%, transparent);
+  color: inherit;
+  font-weight: 500;
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, #8a7048 55%, transparent);
+  text-underline-offset: 3px;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.audio-clarity-banner {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  border: 1px solid #e8e0d2;
+  background: #faf8f4;
+  color: #4a453c;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.audio-clarity-banner.poor {
+  border-color: #e4d5c4;
+  background: #f7f2ea;
+}
+
+.audio-clarity-banner-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.audio-clarity-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.audio-clarity-chip.ok {
+  border-color: #cfe6dc;
+  background: #f4faf7;
+  color: #2f6f5e;
+}
+
+.audio-clarity-chip.caution,
+.audio-clarity-chip.poor {
+  border-color: #e6ddd0;
+  background: #fff;
+  color: #6b6458;
+}
+
+.audio-clarity-chip.poor {
+  border-color: #e4d5c4;
+  background: #f7f2ea;
+}
+
+.transcript-quality-tags {
+  margin: 0 0 8px;
 }
 
 .transcript-row.agent .bubble {
