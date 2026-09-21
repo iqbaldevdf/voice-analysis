@@ -5,7 +5,7 @@ Hand this document to DevOps. It describes **what the current codebase needs to 
 **Product:** VoiceIQ (Voice Analysis)  
 **Architecture:** 3 application services + MongoDB Atlas + Amazon S3 (audio) + reverse proxy  
 **Repo layout:** `frontend/`, `backend/`, `ai-service/`, `docker-compose.yml` (Mongo only)  
-**Current state:** No production Dockerfiles, no CI/CD, no in-app login. Local run is `npm run dev:*`. S3 is the **planned** durable audio store (section 21); app code still uses local disk until engineering wires it.
+**Current state:** No production Dockerfiles, no CI/CD, no in-app login. Local run is `npm run dev:*`. S3 audio is **wired** behind `S3_ENABLED` (F11); default remains local disk. DevOps still creates private buckets (section 21).
 
 Related local-dev setup lives in the root [README.md](../README.md).
 
@@ -571,7 +571,7 @@ Token needs export + recording download permissions on that Freshcaller account.
 - User authentication
 - Log aggregation / APM
 - Horizontal scaling / analysis queue
-- **S3 upload/download in application code** (buckets are planned in section 21; backend still writes local disk today)
+- **S3 upload/download in application code** — wired (F11); buckets + IAM still DevOps; default `S3_ENABLED=false`
 
 ---
 
@@ -609,9 +609,9 @@ Point `FC_RECORDINGS_DIR`, `NORMALIZED_DIR`, `EXPORTS_DIR` at `/opt/voiceiq/data
 
 ---
 
-## 21. Amazon S3 audio storage (planned)
+## 21. Amazon S3 audio storage (F11)
 
-**Status:** DevOps can create buckets **now**. The application **does not yet read/write S3**. Today it stores files under `backend/data/` and Mongo `localPath`. Engineering must implement the wiring below before production relies on S3.
+**Status:** Application wiring **implemented** (`S3_ENABLED` switch). DevOps must still create private buckets and IAM. With `S3_ENABLED=false` (default), behaviour is local-disk only.
 
 Call recordings are **PII** (voice + phone). Buckets must stay **private**. Never enable public ACLs, static website hosting, or anonymous `GetObject`.
 
@@ -620,18 +620,18 @@ Call recordings are **PII** (voice + phone). Buckets must stay **private**. Neve
 ```
 Freshcaller
     → Backend downloads bytes
-    → PUT to S3  (source of truth)
-    → Mongo stores s3Bucket + s3Key  (not a VM path as source of truth)
+    → If S3_ENABLED: PUT to S3  (source of truth) + optional local cache
+    → Else: write FC_RECORDINGS_DIR only
+    → Mongo stores s3Bucket + s3Key when S3; localPath as cache path
 
 Playback  GET /recordings/db/:callId/audio
-    → Backend GetObject from S3 (or short-lived cache) and streams to the browser
+    → Backend streams from local cache or GetObject from S3
     → Do not redirect the browser to a public S3 URL
 
 Analyze
-    → Backend GetObject to local cache  (fc-recordings / normalized)
+    → ensureLocalAudio: cache hit → else S3 GetObject → else Freshcaller
     → ffmpeg normalize on local disk
     → POST AI /analyze { audio_path: local wav }
-    → Optional: delete local files after success (keep S3)
 ```
 
 Do **not** teach the AI service to read `s3://` in the first version. Keep `/analyze` on local paths.
@@ -738,9 +738,7 @@ Optional cost save (if objects are rarely re-analyzed after 90 days):
 - After 90 days: transition `recordings/` to **S3 Standard-IA** or **Glacier Instant Retrieval**
 - Keep **Instant Retrieval** if QA still plays old calls from the UI. Do not use Glacier Flexible/Deep Archive — restore delay will break playback and re-analyze.
 
-### 21.6 Planned app env vars (engineering)
-
-When S3 is wired, `backend/.env` will need:
+### 21.6 App env vars
 
 ```
 AWS_REGION=ap-south-1
@@ -751,12 +749,14 @@ S3_ENABLED=true
 # AWS_SECRET_ACCESS_KEY=
 ```
 
-Mongo `recordings` documents should gain (engineering):
+Default for developers: omit `S3_ENABLED` or set `false` — local `FC_RECORDINGS_DIR` only.
+
+Mongo `recordings` documents:
 
 | Field | Example |
 | --- | --- |
 | `s3Bucket` | `voiceiq-prod-audio` |
-| `s3Key` | `recordings/2026/09/18/fc_9064160_5384090.mp3` |
+| `s3Key` | `recordings/2026-09-18/fc_9064160_5384090.mp3` |
 | `localPath` | cache path only; may be empty after prune |
 
 ### 21.7 Target data flow
@@ -778,17 +778,20 @@ Mongo `recordings` documents should gain (engineering):
 
 Keep `GET /api/recordings/db/:callId/audio`. Backend streams from cache or S3. Browser never talks to S3 directly (avoids CORS and leaked URLs).
 
-### 21.8 Engineering work (not DevOps)
+### 21.8 Application wiring (F11)
 
-These files still assume local disk only:
+Implemented in:
 
-- `backend/src/freshcaller/dailySyncPipeline.ts` — write after download
-- `backend/src/services/analyzeRecording.ts` — `ensureLocalAudio` should GetObject from S3
-- `backend/src/routes/dbRecordings.ts` — `/audio` should stream from S3 on cache miss
+- `backend/src/storage/audioStore.ts` — local vs S3 helpers
+- `backend/src/freshcaller/dailySyncPipeline.ts` — PUT after download when enabled
+- `backend/src/services/analyzeRecording.ts` — `ensureLocalAudio` GetObject / Freshcaller / PUT
+- `backend/src/routes/dbRecordings.ts` — `/audio` streams cache or S3
 - `backend/src/db/mongo.ts` — `s3Bucket` / `s3Key` fields
-- Specs: `docs/specs/02-architecture.md` and F01/F02 when behaviour ships
+- Spec: [F11-dual-audio-storage.md](./specs/features/F11-dual-audio-storage.md)
 
 Local `docker compose` Mongo + local files remain valid for developer machines (`S3_ENABLED=false`).
+
+Still later: export ZIP PUT, automatic cache prune, bulk backfill script.
 
 ### 21.9 DevOps create checklist
 

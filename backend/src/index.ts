@@ -13,6 +13,7 @@ import { exportStore } from "./freshcaller/exportStore.js";
 import { runExportSync } from "./freshcaller/syncWorker.js";
 import type { FreshcallerCall } from "./freshcaller/types.js";
 import { connectMongo, getMongoUri, pingMongo } from "./db/mongo.js";
+import { s3StatusForHealth } from "./storage/audioStore.js";
 import { createDbRecordingsRouter } from "./routes/dbRecordings.js";
 import { createFreshcallerSyncRouter } from "./routes/freshcallerSync.js";
 import { createAgentsRouter } from "./routes/agents.js";
@@ -262,6 +263,7 @@ app.get("/health", async (_req, res) => {
       uri: getMongoUri().replace(/\/\/.*@/, "//***@"),
       connected: mongoOk,
     },
+    s3: s3StatusForHealth(),
   });
 });
 

@@ -8,6 +8,7 @@ import { toListingDoc, upsertRecordingListing } from "../db/recordingListings.js
 import { audioClarityFlagFromResult, type AudioClarityFlag } from "../lib/audioClarity.js";
 import { fillMissingIntroductionScripts } from "../scoring/fillIntroductionScript.js";
 import { analyzeRecordingOnce, confirmTranscriptOnce } from "../services/analyzeRecording.js";
+import { hasAudioAvailable, openRecordingReadStream } from "../storage/audioStore.js";
 import {
   excludeForwardedMailFilter,
   excludeVoicemailFilter,
@@ -84,7 +85,7 @@ function toListItem(doc: RecordingDocument): RecordingListItem {
     botHandling: doc.botHandling ?? "none",
     isBotInvolved: doc.isBotInvolved ?? false,
     localFileName: doc.localFileName,
-    hasLocalAudio: Boolean(doc.localPath),
+    hasLocalAudio: hasAudioAvailable(doc),
     analysisStatus: doc.analysisStatus,
     disposition: doc.disposition ?? null,
     analysisError: doc.analysisError,
@@ -203,16 +204,24 @@ function parseListQuery(req: {
   };
 }
 
-/** Build filter for the primary `recordings` collection (uses localPath instead of hasLocalAudio). */
+/** Build filter for the primary `recordings` collection (uses localPath/s3Key instead of hasLocalAudio). */
 function adaptFilterForRecordings(filter: Record<string, unknown>): Record<string, unknown> {
   const next = { ...filter };
   const and = Array.isArray(next.$and) ? [...(next.$and as Record<string, unknown>[])] : [];
   if (next.hasLocalAudio === true) {
-    and.push({ localPath: { $nin: [null, ""] } });
+    and.push({
+      $or: [
+        { localPath: { $nin: [null, ""] } },
+        { s3Key: { $nin: [null, ""] } },
+      ],
+    });
     delete next.hasLocalAudio;
   } else if (next.hasLocalAudio === false) {
     and.push({
-      $or: [{ localPath: null }, { localPath: "" }, { localPath: { $exists: false } }],
+      $and: [
+        { $or: [{ localPath: null }, { localPath: "" }, { localPath: { $exists: false } }] },
+        { $or: [{ s3Key: null }, { s3Key: "" }, { s3Key: { $exists: false } }] },
+      ],
     });
     delete next.hasLocalAudio;
   }
@@ -499,24 +508,41 @@ export function createDbRecordingsRouter(): Router {
         return;
       }
 
-      if (!doc.localPath) {
+      if (!hasAudioAvailable(doc)) {
         res.status(404).json({
-          error: "Local audio not available. Re-run import:recordings to download.",
+          error: "Audio not available. Re-run sync or analyze to download.",
         });
         return;
       }
 
-      try {
-        await fs.access(doc.localPath);
-      } catch {
-        res.status(404).json({ error: "Audio file missing on disk", path: doc.localPath });
-        return;
+      const opened = await openRecordingReadStream(doc);
+      if (opened.from === "s3" || doc.localPath !== opened.localPath) {
+        await recordingsCollection().updateOne(
+          { callId: doc.callId, recordingId: doc.recordingId },
+          {
+            $set: {
+              localPath: opened.localPath,
+              localFileName: path.basename(opened.localPath),
+              updatedAt: new Date(),
+            },
+          },
+        );
       }
-
-      res.sendFile(path.resolve(doc.localPath));
+      res.setHeader("Content-Type", opened.contentType);
+      opened.stream.on("error", (err) => {
+        if (!res.headersSent) {
+          res.status(500).json({ error: err.message });
+        } else {
+          res.destroy(err);
+        }
+      });
+      opened.stream.pipe(res);
     } catch (error) {
+      const status = (error as { status?: number }).status ?? 500;
       const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
+      if (!res.headersSent) {
+        res.status(status).json({ error: message });
+      }
     }
   });
 

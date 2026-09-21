@@ -59,6 +59,10 @@ export type RecordingDocument = {
   disposition?: SalesDisposition | null;
   localPath?: string | null;
   localFileName?: string | null;
+  /** F11: private S3 bucket when durable audio is in S3. */
+  s3Bucket?: string | null;
+  /** F11: object key e.g. recordings/2026-09-18/fc_123_456.mp3 */
+  s3Key?: string | null;
   analysisStatus: AnalysisStatus;
   analysisError?: string | null;
   analyzedAt?: Date | null;

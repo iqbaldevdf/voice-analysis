@@ -25,14 +25,17 @@ One document per Freshcaller call + recording pair.
 | `disposition` | enum | `hung_up`, `not_interested`, `appointment`, `follow_up`, `dnc`, or null |
 | `analysisStatus` | enum | `none`, `queued`, `transcribing`, `running`, `awaiting_transcript_review`, `completed`, `failed` |
 | `analysisResult` | object | Full AI payload (large); may include `bot_segment` (F09) and F10 `call_quality.audio_clarity_*` |
-| `localPath` | string | Path to downloaded audio |
+| `localPath` | string | Local cache path to downloaded audio (may be empty after prune in S3 mode) |
+| `localFileName` | string | Basename of cached file |
+| `s3Bucket` | string | F11: private audio bucket when `S3_ENABLED` |
+| `s3Key` | string | F11: e.g. `recordings/2026-09-18/fc_9064160_5384090.mp3` |
 | `recordingUrl` | string | Freshcaller URL |
 
 **Indexes**: unique `(callId, recordingId)`; `callDate`, `agentId`, `analysisStatus`.
 
 ### `recording_listings` (projection)
 
-Same metadata as list views need; **no** `analysisResult`. Kept in sync on write. Includes `audioClarityFlag` (`ok` \| `caution` \| `poor` \| null) for the F10 list badge.
+Same metadata as list views need; **no** `analysisResult`. Kept in sync on write. Includes `audioClarityFlag` (`ok` \| `caution` \| `poor` \| null) for the F10 list badge. `hasLocalAudio` is true when a local cache file path exists **or** `s3Key` is set (F11).
 
 ### `agents`
 

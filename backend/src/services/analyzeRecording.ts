@@ -8,6 +8,10 @@ import { upsertRecordingListing } from "../db/recordingListings.js";
 import { normalizeInWorker } from "../audioPool.js";
 import { isLikelyVoicemail, VOICEMAIL_MAX_DURATION_SEC } from "../voicemail.js";
 import {
+  ensureCachedRecording,
+  storeOriginalRecording,
+} from "../storage/audioStore.js";
+import {
   resolveSpeakerOverride,
   storedAnalysisForRemap,
 } from "./speakerRemap.js";
@@ -20,24 +24,11 @@ const backendRoot = path.resolve(__dirname, "../..");
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://127.0.0.1:8001";
 const DUAL_STT_ENABLED = process.env.DUAL_STT_ENABLED === "true";
 const NORMALIZED_DIR = path.resolve(backendRoot, process.env.NORMALIZED_DIR ?? "./data/normalized");
-const FC_RECORDINGS_DIR = path.resolve(
-  backendRoot,
-  process.env.FC_RECORDINGS_DIR ?? "./data/fc-recordings",
-);
 
 const runningKeys = new Set<string>();
 
 function keyOf(callId: number, recordingId: number) {
   return `${callId}:${recordingId}`;
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function participantContext(doc: RecordingDocument) {
@@ -206,32 +197,49 @@ async function ensureLocalAudio(doc: RecordingDocument): Promise<{
   localPath: string;
   localFileName: string;
 }> {
-  if (doc.localPath && (await fileExists(doc.localPath))) {
-    return {
-      localPath: doc.localPath,
-      localFileName: doc.localFileName || path.basename(doc.localPath),
-    };
+  const cached = await ensureCachedRecording(doc);
+  if (cached) {
+    if (cached.from === "s3") {
+      await recordingsCollection().updateOne(
+        { callId: doc.callId, recordingId: doc.recordingId },
+        {
+          $set: {
+            localPath: cached.localPath,
+            localFileName: cached.localFileName,
+            updatedAt: new Date(),
+          },
+        },
+      );
+    }
+    return { localPath: cached.localPath, localFileName: cached.localFileName };
   }
 
   const client = new FreshcallerClient();
   const downloaded = await client.downloadRecording(doc.callId, doc.recordingId);
-  await fs.mkdir(FC_RECORDINGS_DIR, { recursive: true });
-  const localFileName = `fc_${doc.callId}_${doc.recordingId}${downloaded.extension}`;
-  const localPath = path.join(FC_RECORDINGS_DIR, localFileName);
-  await fs.writeFile(localPath, downloaded.buffer);
+  const stored = await storeOriginalRecording({
+    callId: doc.callId,
+    recordingId: doc.recordingId,
+    callDate: doc.callDate,
+    buffer: downloaded.buffer,
+    extension: downloaded.extension,
+    contentType: downloaded.contentType ?? undefined,
+  });
 
   await recordingsCollection().updateOne(
     { callId: doc.callId, recordingId: doc.recordingId },
     {
       $set: {
-        localPath,
-        localFileName,
+        localPath: stored.localPath,
+        localFileName: stored.localFileName,
+        ...(stored.s3Key
+          ? { s3Key: stored.s3Key, s3Bucket: stored.s3Bucket }
+          : {}),
         updatedAt: new Date(),
       },
     },
   );
 
-  return { localPath, localFileName };
+  return { localPath: stored.localPath, localFileName: stored.localFileName };
 }
 
 /**

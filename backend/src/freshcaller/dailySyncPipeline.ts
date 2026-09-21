@@ -15,6 +15,11 @@ import type { FreshcallerCall } from "./types.js";
 import { appendCronLog, createRunId, withExportJobId, type CronRunContext } from "./cronLogger.js";
 import { callDateFromCreatedTime, istDayRangeIso, previousIstCallDate } from "./dateUtils.js";
 import { extractCallsJsonFromZip } from "./zipCalls.js";
+import {
+  ensureCachedRecording,
+  FC_RECORDINGS_DIR,
+  storeOriginalRecording,
+} from "../storage/audioStore.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,10 +28,6 @@ const backendRoot = path.resolve(__dirname, "../..");
 const POLL_INTERVAL_MS = Number(process.env.FRESHCALLER_POLL_INTERVAL_MS ?? 4000);
 const MAX_POLL_ATTEMPTS = Number(process.env.FRESHCALLER_MAX_POLL_ATTEMPTS ?? 90);
 const EXPORTS_DIR = path.resolve(backendRoot, process.env.EXPORTS_DIR ?? "./data/exports");
-const FC_RECORDINGS_DIR = path.resolve(
-  backendRoot,
-  process.env.FC_RECORDINGS_DIR ?? "./data/fc-recordings",
-);
 
 let running = false;
 let runningCallDate: string | null = null;
@@ -49,15 +50,6 @@ function syncAlreadyRunningError(): Error {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function patchExportJob(
@@ -406,7 +398,12 @@ export async function runDailySync(
     let callsIndexed = 0;
     const touchedAgents = new Set<string>();
     const collection = recordingsCollection();
-    const toDownload: Array<{ callId: number; recordingId: number; url: string }> = [];
+    const toDownload: Array<{
+      callId: number;
+      recordingId: number;
+      url: string;
+      callDate: string;
+    }> = [];
 
     for (const call of withRecording) {
       const recording = call.recording!;
@@ -457,6 +454,8 @@ export async function runDailySync(
         isBotInvolved: connection.isBotInvolved,
         localPath: existingRec?.localPath ?? null,
         localFileName: existingRec?.localFileName ?? null,
+        s3Bucket: existingRec?.s3Bucket ?? null,
+        s3Key: existingRec?.s3Key ?? null,
         analysisStatus: existingRec?.analysisStatus ?? "none",
         analysisError: existingRec?.analysisError ?? null,
         analyzedAt: existingRec?.analyzedAt ?? null,
@@ -479,6 +478,7 @@ export async function runDailySync(
           callId: call.id,
           recordingId: recording.id,
           url: String(recording.url ?? ""),
+          callDate: derivedCallDate,
         });
       }
     }
@@ -511,23 +511,46 @@ export async function runDailySync(
         callId: item.callId,
         recordingId: item.recordingId,
       });
-      if (existingRec?.localPath && (await fileExists(existingRec.localPath))) {
+      const cached = existingRec ? await ensureCachedRecording(existingRec) : null;
+      if (cached) {
+        if (cached.from === "s3" && existingRec) {
+          const updated = await collection.findOneAndUpdate(
+            { callId: item.callId, recordingId: item.recordingId },
+            {
+              $set: {
+                localPath: cached.localPath,
+                localFileName: cached.localFileName,
+                updatedAt: new Date(),
+              },
+            },
+            { returnDocument: "after" },
+          );
+          if (updated) await upsertRecordingListing(updated);
+        }
         audioDownloaded += 1;
         continue;
       }
 
       try {
         const audio = await client.downloadRecording(item.callId, item.recordingId);
-        const localFileName = `fc_${item.callId}_${item.recordingId}${audio.extension}`;
-        const localPath = path.join(FC_RECORDINGS_DIR, localFileName);
-        await fs.writeFile(localPath, audio.buffer);
+        const stored = await storeOriginalRecording({
+          callId: item.callId,
+          recordingId: item.recordingId,
+          callDate: existingRec?.callDate ?? item.callDate,
+          buffer: audio.buffer,
+          extension: audio.extension,
+          contentType: audio.contentType ?? undefined,
+        });
 
         const updated = await collection.findOneAndUpdate(
           { callId: item.callId, recordingId: item.recordingId },
           {
             $set: {
-              localPath,
-              localFileName,
+              localPath: stored.localPath,
+              localFileName: stored.localFileName,
+              ...(stored.s3Key
+                ? { s3Key: stored.s3Key, s3Bucket: stored.s3Bucket }
+                : {}),
               updatedAt: new Date(),
             },
           },
@@ -537,7 +560,7 @@ export async function runDailySync(
           await upsertRecordingListing(updated);
         }
         audioDownloaded += 1;
-        await appendCronLog(ctx, "info", "download", `Downloaded ${localFileName}`, {
+        await appendCronLog(ctx, "info", "download", `Downloaded ${stored.localFileName}`, {
           callId: item.callId,
           recordingId: item.recordingId,
           bytes: audio.buffer.length,

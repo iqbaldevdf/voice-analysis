@@ -2,6 +2,7 @@ import type { RecordingDocument } from "./mongo.js";
 import { recordingListingsCollection } from "./mongo.js";
 import { isLikelyVoicemail } from "../voicemail.js";
 import { audioClarityFlagFromResult, type AudioClarityFlag } from "../lib/audioClarity.js";
+import { hasAudioAvailable } from "../storage/audioStore.js";
 
 export type RecordingListingDoc = {
   callId: number;
@@ -65,7 +66,7 @@ export function toListingDoc(doc: RecordingDocument): RecordingListingDoc {
     isBotInvolved: doc.isBotInvolved ?? false,
     disposition: doc.disposition ?? null,
     localFileName: doc.localFileName,
-    hasLocalAudio: Boolean(doc.localPath),
+    hasLocalAudio: hasAudioAvailable(doc),
     analysisStatus: doc.analysisStatus,
     analysisError: doc.analysisError,
     analyzedAt: doc.analyzedAt,

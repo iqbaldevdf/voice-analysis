@@ -16,6 +16,7 @@
     "reanalyze": "tsx scripts/reanalyze-recording.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.758.0",
     "adm-zip": "^0.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

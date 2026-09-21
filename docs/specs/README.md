@@ -43,6 +43,7 @@ This folder is the **source of truth** for what VoiceIQ should do. Code implemen
 | F08 | [Dual STT + transcript review](./features/F08-dual-stt-transcript-review.md) | Implemented |
 | F09 | [Bot call handling](./features/F09-bot-call-handling.md) | Implemented |
 | F10 | [Audio clarity flags](./features/F10-audio-clarity-flags.md) | Implemented |
+| F11 | [Dual audio storage (local vs S3)](./features/F11-dual-audio-storage.md) | Implemented |
 
 ### Scoring detail (canonical)
 

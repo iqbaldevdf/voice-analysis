@@ -24,6 +24,7 @@ Terms used consistently across all VoiceIQ specs.
 | **Speaker mapping** | Assigning diarization labels (`A`, `B`) to roles (`agent`, `customer`). See F07. |
 | **Speaker-aware transcript** | Transcript text labeled by role (and optionally name), built after mapping. See F07. |
 | **Audio clarity flag** | Recording reliability: `ok` / `caution` / `poor` from ASR word confidence and WAV clipping/quietness (F10). Not agent performance. |
+| **Dual audio storage** | Local disk in dev (`S3_ENABLED=false`); private S3 originals in prod with local cache for ffmpeg/AI (F11). |
 
 ## Disposition colour coding (UI)
 
