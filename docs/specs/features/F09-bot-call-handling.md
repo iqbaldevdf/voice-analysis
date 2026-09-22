@@ -44,6 +44,7 @@ Additional signals (when present):
 - [x] AC3: `bot_only` → `isConnected: false`; not counted in agent connects; analyze returns 422.
 - [x] AC4: `bot_transferred` → connect allowed; `isBotInvolved: true`; list/details/agent dashboard show badge.
 - [x] AC4b: Agent dashboard with hide-voicemail includes `bot_transferred` connects; excludes `bot_only`.
+- [x] AC4c: Agent detail recordings table has a **Bot** column for every row (`Bot → Agent` / `Bot handled` / `No`). When sync `botHandling` is `none`, the column uses analysis `bot_segment.handling` (script-inferred) so it matches call details — sync fields are not rewritten (AC17).
 - [x] AC5: Default recordings list hides `bot_only` (same default exclusion path as non-conversation noise).
 - [x] AC6: Spec + data model document the new fields.
 
@@ -76,6 +77,7 @@ Additional signals (when present):
 | Route | Change |
 | --- | --- |
 | Calls list | Badge when `bot_transferred` (and optionally muted note if `bot_only` ever shown) |
+| Agent detail recordings table | Dedicated **Bot** column: `Bot → Agent` / `Bot handled` / `No` |
 | Call details | Status pill / fact for bot involvement |
 
 ## Data model

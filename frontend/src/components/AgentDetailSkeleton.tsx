@@ -4,18 +4,14 @@ function TableRowSkeleton() {
   return (
     <tr className="skeleton-row">
       <td><Skeleton width={16} height={16} /></td>
-      <td><Skeleton width="72%" height={14} /></td>
-      <td>
-        <Skeleton width="80%" height={14} />
-        <Skeleton width="55%" height={12} className="skeleton-mt" />
-      </td>
+      <td><Skeleton width={96} height={14} /></td>
+      <td><Skeleton width="90%" height={14} /></td>
       <td><Skeleton width={72} height={22} /></td>
+      <td><Skeleton width={88} height={22} /></td>
       <td><Skeleton width={56} height={14} /></td>
       <td><Skeleton width={48} height={14} /></td>
-      <td>
-        <Skeleton width={40} height={14} />
-        <Skeleton width={64} height={12} className="skeleton-mt" />
-      </td>
+      <td><Skeleton width={40} height={14} /></td>
+      <td><Skeleton width={52} height={14} /></td>
       <td><Skeleton width={52} height={14} /></td>
       <td><Skeleton width={68} height={22} /></td>
       <td><Skeleton width={72} height={22} /></td>
@@ -104,16 +100,18 @@ export function AgentDetailSkeleton({ rows = 6 }: { rows?: number }) {
           </div>
         </div>
         <div className="table-wrap recordings-table-wrap skeleton-mt">
-          <table className="data-table">
+          <table className="data-table agent-recordings-table">
             <thead>
               <tr>
                 <th />
                 <th>When</th>
                 <th>Customer</th>
                 <th>Answered</th>
+                <th>Bot</th>
                 <th>Direction</th>
                 <th>Duration</th>
                 <th>Talk</th>
+                <th>Script</th>
                 <th>Speech rate</th>
                 <th>Disposition</th>
                 <th>Status</th>

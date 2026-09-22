@@ -10,6 +10,7 @@
   --teal-soft: #e6f7f4;
   --danger: #dc2626;
   --warn: #d97706;
+  --bot: #b45309;
   --good: #0d9488;
   --shadow: 0 1px 2px rgba(30, 36, 51, 0.04), 0 8px 24px rgba(30, 36, 51, 0.04);
   --radius: 12px;
@@ -286,6 +287,11 @@ code {
   min-width: 0;
   padding: 28px 32px 64px;
   max-width: 1180px;
+}
+
+/* Agent roster + detail need a wider canvas for the recordings table */
+.avoma-main:has(.agents-page) {
+  max-width: 1560px;
 }
 
 /* ——— Shared ——— */
@@ -677,6 +683,12 @@ input[type="text"] {
   border-color: #fed7aa;
 }
 
+.badge.bot {
+  background: #fff7ed;
+  color: var(--bot);
+  border-color: #fdba74;
+}
+
 .badge.danger {
   background: #fef2f2;
   color: var(--danger);
@@ -899,6 +911,52 @@ input[type="text"] {
 
 .agent-recordings-panel {
   padding: 14px 16px 10px;
+}
+
+.agent-recordings-panel .recordings-table-wrap {
+  margin: 0;
+  overflow-x: auto;
+}
+
+.agent-recordings-table {
+  width: 100%;
+  min-width: 1280px;
+  table-layout: auto;
+}
+
+.agent-recordings-table .cell-nowrap {
+  white-space: nowrap;
+}
+
+.agent-recordings-table .col-check {
+  width: 36px;
+}
+
+.agent-recordings-table .col-customer {
+  min-width: 240px;
+  width: 22%;
+}
+
+.agent-recordings-table .col-talk {
+  min-width: 72px;
+}
+
+.agent-recordings-table .col-script {
+  min-width: 88px;
+}
+
+.agent-recordings-table .col-when {
+  min-width: 128px;
+}
+
+.agent-recordings-table .col-bot {
+  min-width: 120px;
+}
+
+.agent-recordings-table .col-action {
+  width: 1%;
+  text-align: right;
+  padding-right: 4px;
 }
 
 .recordings-title {
@@ -1203,6 +1261,12 @@ input[type="text"] {
   padding: 2px 9px;
   font-size: 0.72rem;
   font-weight: 600;
+}
+
+.status-pill.bot {
+  background: #fff7ed;
+  color: var(--bot);
+  border: 1px solid #fdba74;
 }
 
 .score-pill-card {
@@ -2717,7 +2781,7 @@ input[type="text"] {
 }
 
 .transcript-row.bot .bubble {
-  border-left: 3px solid #b45309;
+  border-left: 3px solid var(--bot);
   background: #fff7ed;
 }
 

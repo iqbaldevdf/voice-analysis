@@ -374,7 +374,7 @@ export function CallsListView({
                         {analysisBadge(rec.analysisStatus)}
                       </span>
                       {rec.botHandling === "bot_transferred" ? (
-                        <span className="badge muted" title="Freshcaller: bot then transferred to agent">
+                        <span className="badge bot" title="Freshcaller: bot then transferred to agent">
                           Bot → Agent
                         </span>
                       ) : null}
@@ -490,7 +490,7 @@ export function CallsListView({
                         </span>
                         {rec.botHandling === "bot_transferred" ? (
                           <span
-                            className="badge muted"
+                            className="badge bot"
                             style={{ marginLeft: 6 }}
                             title="Freshcaller: bot then transferred to agent"
                           >

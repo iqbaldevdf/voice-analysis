@@ -49,7 +49,9 @@ Frontend: `http://127.0.0.1:5173` (Vite).
 - Appointment generated (AG)
 - Date range, status, duration, search
 
-**Table columns:** When, Customer, Answered, Direction, Duration, Talk %, Speech rate, Disposition, Status, Call score, Analyze.
+**Table columns:** When, Customer, Answered, Bot, Direction, Duration, Talk, Script, Speech rate, Disposition, Status, Call score, Analyze.
+
+**Bot column (F09):** every row shows bot involvement clearly — **Bot → Agent**, **Bot handled**, or **No** (not only a badge tucked under Answered). Value prefers Freshcaller sync `botHandling`; when that is `none` and the call is analyzed, falls back to `analysisResult.bot_segment.handling` so script-inferred IVR matches call details. Customer name + phone stay on **one line** where width allows. Talk % and introduction script are **separate columns** (interruptions are not shown in this table).
 
 ## Call details page (F02, F04)
 

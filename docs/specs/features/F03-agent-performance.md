@@ -57,3 +57,10 @@ Overall Score subline: `analyzed / connects` (e.g. `5 / 12`).
 ## Open items
 
 - None.
+
+## Related UI (agent recordings table)
+
+- Dedicated **Bot** column (F09 AC4c): `Bot → Agent` / `Bot handled` / `No` — Freshcaller sync first, else analysis `bot_segment` when analyzed.
+- **Talk** and **Script** are separate columns (no interruptions count in this table).
+- **Script** cell shows `score/100` (and rank when present); hover title is `Introduction script: N out of 100`.
+- Customer cell prefers a single line; table uses available horizontal width.

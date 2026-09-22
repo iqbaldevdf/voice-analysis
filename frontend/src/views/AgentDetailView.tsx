@@ -61,6 +61,55 @@ function formatWhen(iso?: string | null): string {
   });
 }
 
+function botColumnLabel(handling?: AgentRecordingRow["botHandling"]): {
+  text: string;
+  title: string;
+  tone: "ok" | "muted" | "warn" | "bot";
+} {
+  if (handling === "bot_transferred") {
+    return {
+      text: "Bot → Agent",
+      title: "Bot spoke, then transferred to this agent (Freshcaller or transcript)",
+      tone: "bot",
+    };
+  }
+  if (handling === "bot_only") {
+    return {
+      text: "Bot handled",
+      title: "Bot or IVR handled this call (Freshcaller or transcript detection)",
+      tone: "bot",
+    };
+  }
+  return { text: "No", title: "No bot involvement detected", tone: "muted" };
+}
+
+function customerCellLabel(rec: AgentRecordingRow): string {
+  const name = rec.customerName?.trim() || "Customer";
+  const phone = (rec.customerPhone || rec.phoneNumber || "").trim();
+  return phone ? `${name} · ${phone}` : name;
+}
+
+function talkCellLabel(rec: AgentRecordingRow): string {
+  if (rec.talkPercentage == null) return "—";
+  return `${rec.talkPercentage.toFixed(0)}%`;
+}
+
+function scriptCellLabel(rec: AgentRecordingRow): string {
+  if (rec.introductionScore != null) {
+    const score = Math.round(rec.introductionScore);
+    const rank = rec.introductionRank ? ` · ${rec.introductionRank}` : "";
+    return `${score}/100${rank}`;
+  }
+  return "—";
+}
+
+function scriptCellTitle(rec: AgentRecordingRow): string | undefined {
+  if (rec.introductionScore == null) return undefined;
+  const score = Math.round(rec.introductionScore);
+  const rank = rec.introductionRank ? ` (${rec.introductionRank})` : "";
+  return `Introduction script: ${score} out of 100${rank}`;
+}
+
 export function AgentDetailView({ onError }: Props) {
   const { agentId = "" } = useParams();
   const navigate = useNavigate();
@@ -497,10 +546,10 @@ export function AgentDetailView({ onError }: Props) {
         </div>
         {batchNotice ? <p className="panel-sub recordings-notice">{batchNotice}</p> : null}
         <div className="table-wrap recordings-table-wrap">
-          <table className="data-table">
+          <table className="data-table agent-recordings-table">
             <thead>
               <tr>
-                <th>
+                <th className="col-check">
                   <input
                     type="checkbox"
                     aria-label="Select calls that need analysis"
@@ -522,17 +571,19 @@ export function AgentDetailView({ onError }: Props) {
                     }}
                   />
                 </th>
-                <th>When</th>
-                <th>Customer</th>
-                <th>Answered</th>
-                <th>Direction</th>
-                <th>Duration</th>
-                <th>Talk / script</th>
-                <th>Speech rate</th>
-                <th>Disposition</th>
-                <th>Status</th>
-                <th>Call score</th>
-                <th></th>
+                <th className="col-when">When</th>
+                <th className="col-customer">Customer</th>
+                <th className="col-answered">Answered</th>
+                <th className="col-bot">Bot</th>
+                <th className="col-direction">Direction</th>
+                <th className="col-duration">Duration</th>
+                <th className="col-talk">Talk</th>
+                <th className="col-script">Script</th>
+                <th className="col-speech">Speech rate</th>
+                <th className="col-disposition">Disposition</th>
+                <th className="col-status">Status</th>
+                <th className="col-score">Call score</th>
+                <th className="col-action"></th>
               </tr>
             </thead>
             <tbody>
@@ -540,18 +591,14 @@ export function AgentDetailView({ onError }: Props) {
                 Array.from({ length: 6 }, (_, index) => (
                   <tr key={`skeleton-${index}`} className="skeleton-row">
                     <td><Skeleton width={16} height={16} /></td>
-                    <td><Skeleton width="72%" height={14} /></td>
-                    <td>
-                      <Skeleton width="80%" height={14} />
-                      <Skeleton width="55%" height={12} className="skeleton-mt" />
-                    </td>
+                    <td><Skeleton width={96} height={14} /></td>
+                    <td><Skeleton width="90%" height={14} /></td>
                     <td><Skeleton width={72} height={22} /></td>
+                    <td><Skeleton width={88} height={22} /></td>
                     <td><Skeleton width={56} height={14} /></td>
                     <td><Skeleton width={48} height={14} /></td>
-                    <td>
-                      <Skeleton width={40} height={14} />
-                      <Skeleton width={64} height={12} className="skeleton-mt" />
-                    </td>
+                    <td><Skeleton width={40} height={14} /></td>
+                    <td><Skeleton width={52} height={14} /></td>
                     <td><Skeleton width={52} height={14} /></td>
                     <td><Skeleton width={68} height={22} /></td>
                     <td><Skeleton width={72} height={22} /></td>
@@ -561,12 +608,14 @@ export function AgentDetailView({ onError }: Props) {
                 ))
               ) : recordings.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="empty soft">No recordings match these filters.</td>
+                  <td colSpan={14} className="empty soft">No recordings match these filters.</td>
                 </tr>
               ) : (
-                recordings.map((rec) => (
+                recordings.map((rec) => {
+                  const bot = botColumnLabel(rec.botHandling);
+                  return (
                   <tr key={rowKey(rec)}>
-                    <td>
+                    <td className="col-check">
                       <input
                         type="checkbox"
                         aria-label={`Select call ${rec.callId}`}
@@ -580,7 +629,7 @@ export function AgentDetailView({ onError }: Props) {
                         }}
                       />
                     </td>
-                    <td>
+                    <td className="col-when cell-nowrap">
                       <button
                         type="button"
                         className="linkish"
@@ -591,53 +640,40 @@ export function AgentDetailView({ onError }: Props) {
                           : rec.callDate || "—"}
                       </button>
                     </td>
-                    <td>
-                      <strong>{rec.customerName || "Customer"}</strong>
-                      <div className="muted-inline">{rec.customerPhone || rec.phoneNumber || "—"}</div>
+                    <td className="col-customer cell-nowrap" title={customerCellLabel(rec)}>
+                      {customerCellLabel(rec)}
                     </td>
-                    <td>
+                    <td className="col-answered cell-nowrap">
                       <span className={`badge ${rec.answered ? "ok" : "muted"}`}>
                         {rec.answered ? "Answered" : "Not answered"}
                       </span>
-                      {rec.botHandling === "bot_transferred" ? (
-                        <span
-                          className="badge muted"
-                          style={{ marginLeft: 6 }}
-                          title="Bot spoke, then transferred to this agent"
-                        >
-                          Bot → Agent
-                        </span>
-                      ) : null}
                     </td>
-                    <td className="capitalize">{rec.direction || "—"}</td>
-                    <td>{rec.durationSec != null ? formatDurationLong(rec.durationSec) : "—"}</td>
-                    <td>
-                      {rec.talkPercentage != null ? `${rec.talkPercentage.toFixed(0)}% talk` : "—"}
-                      {rec.introductionScore != null ? (
-                        <div className="muted-inline">
-                          Script {Math.round(rec.introductionScore)}
-                          {rec.introductionRank ? ` · ${rec.introductionRank}` : ""}
-                        </div>
-                      ) : rec.analysisStatus === "completed" ? (
-                        <div className="muted-inline">Script —</div>
-                      ) : null}
-                      {rec.interruptionCount != null ? (
-                        <div className="muted-inline">{rec.interruptionCount} interruptions</div>
-                      ) : null}
+                    <td className="col-bot cell-nowrap">
+                      <span className={`badge ${bot.tone}`} title={bot.title}>
+                        {bot.text}
+                      </span>
                     </td>
-                    <td>
+                    <td className="col-direction capitalize cell-nowrap">{rec.direction || "—"}</td>
+                    <td className="col-duration cell-nowrap">
+                      {rec.durationSec != null ? formatDurationLong(rec.durationSec) : "—"}
+                    </td>
+                    <td className="col-talk cell-nowrap">{talkCellLabel(rec)}</td>
+                    <td className="col-script cell-nowrap" title={scriptCellTitle(rec)}>
+                      {scriptCellLabel(rec)}
+                    </td>
+                    <td className="col-speech cell-nowrap">
                       {rec.wordsPerSecond != null
                         ? `${wordsPerMinute(rec.wordsPerSecond) ?? "—"} wpm`
                         : "—"}
                     </td>
-                    <td>
+                    <td className="col-disposition cell-nowrap">
                       {rec.disposition ? (
                         <span className={dispositionClass(rec.disposition)}>{dispositionLabel(rec.disposition)}</span>
                       ) : (
                         <span className="muted-inline">—</span>
                       )}
                     </td>
-                    <td>
+                    <td className="col-status cell-nowrap">
                       <span
                         className={`badge ${
                           rec.analysisStatus === "completed"
@@ -661,7 +697,7 @@ export function AgentDetailView({ onError }: Props) {
                       </span>
                       <UnclearAudioBadge flag={rec.audioClarityFlag} />
                     </td>
-                    <td>
+                    <td className="col-score cell-nowrap">
                       <span className={`badge ${scoreTone(rec.callQualityScore ?? rec.overallScore)}`}>
                         {rec.callQualityScore != null
                           ? rec.callQualityScore.toFixed(0)
@@ -670,7 +706,7 @@ export function AgentDetailView({ onError }: Props) {
                             : "—"}
                       </span>
                     </td>
-                    <td>
+                    <td className="col-action cell-nowrap">
                       <button
                         type="button"
                         className="btn primary compact"
@@ -687,7 +723,8 @@ export function AgentDetailView({ onError }: Props) {
                       </button>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

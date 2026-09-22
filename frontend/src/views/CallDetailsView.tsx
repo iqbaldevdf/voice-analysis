@@ -51,7 +51,7 @@ import { DISPOSITION_OPTIONS, dispositionClass, dispositionLabel } from "../lib/
 
 const AGENT_COLOR = "#2f6f5e";
 const CUSTOMER_COLOR = "#5c4d7a";
-const BOT_COLOR = "#b45309";
+const BOT_COLOR = "#b45309"; // keep in sync with --bot / .badge.bot in index.css
 const SILENCE_COLOR = "#c5cdc7";
 
 type Props = {
@@ -668,7 +668,7 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
               {needsAnalysis ? "No analysis" : inProgress ? "Analyzing" : statusLabel(job.status)}
             </span>
             {botHandlingLabel(job.botHandling, job.isBotInvolved) ? (
-              <span className="status-pill" title="Freshcaller bot involvement">
+              <span className="status-pill bot" title="Bot involvement">
                 {botHandlingLabel(job.botHandling, job.isBotInvolved)}
               </span>
             ) : null}
@@ -841,7 +841,7 @@ export function CallDetailsView({ job, audioUrlOverride, onBack, onJobUpdate, on
           </button>
           <span className="status-pill">Completed</span>
           {botLabel ? (
-            <span className="status-pill" title="Freshcaller bot involvement">
+            <span className="status-pill bot" title="Bot involvement">
               {botLabel}
             </span>
           ) : null}
