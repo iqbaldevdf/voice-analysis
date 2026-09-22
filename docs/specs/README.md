@@ -44,6 +44,7 @@ This folder is the **source of truth** for what VoiceIQ should do. Code implemen
 | F09 | [Bot call handling](./features/F09-bot-call-handling.md) | Implemented |
 | F10 | [Audio clarity flags](./features/F10-audio-clarity-flags.md) | Implemented |
 | F11 | [Dual audio storage (local vs S3)](./features/F11-dual-audio-storage.md) | Implemented |
+| F12 | [MongoDB → PostgreSQL migration](./features/F12-postgres-migration.md) | Partial (Phase 3 reads) |
 
 ### Scoring detail (canonical)
 

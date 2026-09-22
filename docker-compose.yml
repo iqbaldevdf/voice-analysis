@@ -10,5 +10,25 @@ services:
     environment:
       MONGO_INITDB_DATABASE: voice_analysis
 
+  # F12 — local Postgres (TypeORM). Mongo/Atlas remains source of truth until cutover.
+  postgres:
+    image: postgres:16
+    container_name: voice-analysis-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: voiceiq
+      POSTGRES_PASSWORD: voiceiq
+      POSTGRES_DB: voice_analysis
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voiceiq -d voice_analysis"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   mongo_data:
+  postgres_data:

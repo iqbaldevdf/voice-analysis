@@ -84,4 +84,7 @@ export async function upsertRecordingListing(doc: RecordingDocument): Promise<vo
     { $set: listing },
     { upsert: true },
   );
+  // F12 Phase 2: mirror recording + listing into Postgres when configured.
+  const { dualWriteRecordingPair } = await import("./postgres/dualWrite.js");
+  await dualWriteRecordingPair(doc);
 }

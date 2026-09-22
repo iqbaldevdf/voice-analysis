@@ -1,5 +1,6 @@
 import type { Collection } from "mongodb";
 import { getDb, recordingsCollection, type RecordingDocument } from "./mongo.js";
+import { dualWriteAgent } from "./postgres/dualWrite.js";
 
 export type AgentDocument = {
   agentId: string;
@@ -78,6 +79,8 @@ export async function upsertAgentFromRecording(input: {
     },
     { upsert: true },
   );
+  const saved = await agentsCollection().findOne({ agentId });
+  if (saved) await dualWriteAgent(saved);
   return agentId;
 }
 
@@ -128,6 +131,8 @@ export async function refreshAgentStats(agentId: string): Promise<void> {
       },
     },
   );
+  const saved = await agentsCollection().findOne({ agentId });
+  if (saved) await dualWriteAgent(saved);
 }
 
 export async function backfillAgentsFromRecordings(): Promise<number> {
@@ -145,6 +150,9 @@ export async function backfillAgentsFromRecordings(): Promise<number> {
         { callId: doc.callId, recordingId: doc.recordingId },
         { $set: { agentId } },
       );
+      doc.agentId = agentId;
+      const { dualWriteRecordingPair } = await import("./postgres/dualWrite.js");
+      await dualWriteRecordingPair(doc);
     }
     seen.add(agentId);
   }

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { upsertAgentFromRecording, refreshAgentStats } from "../db/agents.js";
 import { recordingsCollection, type RecordingDocument } from "../db/mongo.js";
 import { upsertRecordingListing } from "../db/recordingListings.js";
+import { dualWriteExportJob } from "../db/postgres/dualWrite.js";
 import {
   exportJobsCollection,
   type ExportJobDocument,
@@ -61,7 +62,9 @@ async function patchExportJob(
     { runId },
     { $set: { ...patch, updatedAt: now } },
   );
-  return exportJobsCollection().findOne({ runId });
+  const updated = await exportJobsCollection().findOne({ runId });
+  if (updated) await dualWriteExportJob(updated);
+  return updated;
 }
 
 export type DailySyncOptions = {
@@ -135,6 +138,7 @@ export async function enqueueDailySync(
   };
 
   await exportJobsCollection().updateOne({ callDate }, { $set: jobDoc }, { upsert: true });
+  await dualWriteExportJob(jobDoc);
 
   void runDailySync({ callDate, force: true, trigger, runId }).catch((err) => {
     console.error("[enqueueDailySync]", err instanceof Error ? err.message : err);
@@ -207,6 +211,7 @@ export async function runDailySync(
     };
 
     await exportJobsCollection().updateOne({ callDate }, { $set: jobDoc }, { upsert: true });
+    await dualWriteExportJob(jobDoc);
   } else {
     await patchExportJob(runId, {
       status: "started",

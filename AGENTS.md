@@ -21,7 +21,7 @@ Instructions for AI coding agents working in this repository.
 | Path | Service |
 | --- | --- |
 | `frontend/src/` | React UI |
-| `backend/src/` | Express API, sync, Mongo |
+| `backend/src/` | Express API, sync, Mongo (+ Postgres/TypeORM scaffolding, F12) |
 | `ai-service/app/` | Python analyze service |
 | `docs/specs/` | Specifications (source of truth) |
 
@@ -33,7 +33,7 @@ npm run dev:backend
 npm run dev:frontend
 ```
 
-Mongo: `docker compose up -d`
+Mongo + local Postgres: `docker compose up -d`
 
 ## Key specs by task
 
@@ -46,7 +46,7 @@ Mongo: `docker compose up -d`
 | List filters | F05, F06 |
 | Bot handling | F09 |
 | API shapes | 04-api-contract.md |
-| Mongo fields | 03-data-model.md |
+| Mongo / Postgres fields | 03-data-model.md, F12 |
 
 ## When adding a feature
 

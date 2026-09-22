@@ -10,6 +10,15 @@
     "import:recordings": "tsx scripts/import-recordings.ts",
     "sync:daily": "tsx scripts/run-daily-sync.ts",
     "check:mongo": "tsx scripts/check-mongo.ts",
+    "check:postgres": "tsx scripts/check-postgres.ts",
+    "smoke:postgres-dual-write": "tsx scripts/smoke-postgres-dual-write.ts",
+    "backfill:postgres": "tsx scripts/backfill-postgres-from-mongo.ts",
+    "parity:postgres": "tsx scripts/parity-postgres-mongo.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "typeorm": "tsx ./node_modules/typeorm/cli.js",
+    "migration:run": "tsx ./node_modules/typeorm/cli.js migration:run -d src/db/postgres/data-source.ts",
+    "migration:revert": "tsx ./node_modules/typeorm/cli.js migration:revert -d src/db/postgres/data-source.ts",
+    "migration:show": "tsx ./node_modules/typeorm/cli.js migration:show -d src/db/postgres/data-source.ts",
     "test:voicemail": "tsx src/freshcaller/connection.selftest.ts",
     "clear:analysis": "tsx scripts/clear-analysis-data.ts",
     "reset:db": "tsx scripts/reset-database.ts",
@@ -24,7 +33,10 @@
     "mongodb": "^6.16.0",
     "multer": "^1.4.5-lts.2",
     "node-cron": "^3.0.3",
+    "pg": "^8.16.3",
     "piscina": "^4.8.0",
+    "reflect-metadata": "^0.2.2",
+    "typeorm": "^0.3.26",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
@@ -34,6 +46,7 @@
     "@types/multer": "^1.4.12",
     "@types/node": "^18.19.80",
     "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.15.5",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   }

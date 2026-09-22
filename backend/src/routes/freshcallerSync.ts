@@ -7,6 +7,15 @@ import {
 import { getCronRuntime, isCronEnabled } from "../freshcaller/cron.js";
 import { activeSyncCallDate, isDailySyncRunning, runDailySync } from "../freshcaller/dailySyncPipeline.js";
 import { previousIstCallDate } from "../freshcaller/dateUtils.js";
+import {
+  pgCronLogsForRun,
+  pgFindExportJob,
+  pgLatestExportJob,
+  pgListCronLogs,
+  pgListCronRuns,
+  pgListExportJobs,
+  postgresReadsEnabled,
+} from "../db/postgres/reads.js";
 
 function serializeJob(doc: ExportJobDocument) {
   return {
@@ -24,12 +33,31 @@ export function createFreshcallerSyncRouter(): Router {
   router.get("/status", async (_req, res) => {
     try {
       const cfg = getCronRuntime();
-      const last = await exportJobsCollection().find().sort({ startedAt: -1 }).limit(1).next();
-      const lastCron = await exportJobsCollection()
-        .find({ trigger: "cron" })
-        .sort({ startedAt: -1 })
-        .limit(1)
-        .next();
+      let last: ExportJobDocument | null = null;
+      let lastCron: ExportJobDocument | null = null;
+      let source: "postgres" | "mongo" = "mongo";
+
+      if (postgresReadsEnabled()) {
+        try {
+          last = await pgLatestExportJob();
+          lastCron = await pgLatestExportJob("cron");
+          if (last || lastCron) source = "postgres";
+        } catch (error) {
+          console.warn(
+            "[postgres read] sync status fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+      if (source === "mongo") {
+        last = await exportJobsCollection().find().sort({ startedAt: -1 }).limit(1).next();
+        lastCron = await exportJobsCollection()
+          .find({ trigger: "cron" })
+          .sort({ startedAt: -1 })
+          .limit(1)
+          .next();
+      }
+
       res.json({
         cron: {
           enabled: isCronEnabled(),
@@ -48,6 +76,7 @@ export function createFreshcallerSyncRouter(): Router {
         runningCallDate: activeSyncCallDate(),
         previousCallDate: previousIstCallDate(),
         lastJob: last ? serializeJob(last) : null,
+        source,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -60,6 +89,29 @@ export function createFreshcallerSyncRouter(): Router {
       const page = Math.max(1, Number(req.query.page ?? 1) || 1);
       const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 10) || 10));
       const skip = (page - 1) * limit;
+
+      if (postgresReadsEnabled()) {
+        try {
+          const pg = await pgListExportJobs({ skip, limit });
+          if (pg.total > 0 || (await pgListExportJobs({ skip: 0, limit: 1 })).total > 0) {
+            res.json({
+              jobs: pg.docs.map(serializeJob),
+              total: pg.total,
+              page,
+              limit,
+              totalPages: Math.max(1, Math.ceil(pg.total / limit)),
+              source: "postgres",
+            });
+            return;
+          }
+        } catch (error) {
+          console.warn(
+            "[postgres read] export jobs fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+
       const collection = exportJobsCollection();
       const [total, docs] = await Promise.all([
         collection.countDocuments({}),
@@ -71,6 +123,7 @@ export function createFreshcallerSyncRouter(): Router {
         page,
         limit,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+        source: "mongo",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -81,7 +134,20 @@ export function createFreshcallerSyncRouter(): Router {
   router.get("/jobs/:callDate", async (req, res) => {
     try {
       const callDate = String(req.params.callDate);
-      const doc = await exportJobsCollection().findOne({ callDate });
+      let doc: ExportJobDocument | null = null;
+      if (postgresReadsEnabled()) {
+        try {
+          doc = await pgFindExportJob(callDate);
+        } catch (error) {
+          console.warn(
+            "[postgres read] export job fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+      if (!doc) {
+        doc = await exportJobsCollection().findOne({ callDate });
+      }
       if (!doc) {
         res.status(404).json({ error: `No sync job for ${callDate}` });
         return;
@@ -141,36 +207,80 @@ export function createFreshcallerSyncRouter(): Router {
       const page = Math.max(1, Number(req.query.page ?? 1) || 1);
       const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 50) || 50));
       const skip = (page - 1) * limit;
+      const runId =
+        typeof req.query.runId === "string" && req.query.runId.trim()
+          ? req.query.runId.trim()
+          : undefined;
+      const callDate =
+        typeof req.query.callDate === "string" && req.query.callDate.trim()
+          ? req.query.callDate.trim()
+          : undefined;
+      const level =
+        typeof req.query.level === "string" && req.query.level !== "all"
+          ? req.query.level
+          : undefined;
+      const dateFrom =
+        typeof req.query.dateFrom === "string" && req.query.dateFrom.trim()
+          ? req.query.dateFrom.trim()
+          : undefined;
+      const dateTo =
+        typeof req.query.dateTo === "string" && req.query.dateTo.trim()
+          ? req.query.dateTo.trim()
+          : undefined;
+
+      if (postgresReadsEnabled()) {
+        try {
+          const pg = await pgListCronLogs({
+            filter: { runId, callDate, level, dateFrom, dateTo },
+            skip,
+            limit,
+          });
+          if (pg.total > 0 || (await pgListCronLogs({ filter: {}, skip: 0, limit: 1 })).total > 0) {
+            res.json({
+              logs: pg.docs.map((d) => ({
+                ...d,
+                createdAt: d.createdAt?.toISOString?.() ?? d.createdAt,
+              })),
+              total: pg.total,
+              page,
+              limit,
+              totalPages: Math.max(1, Math.ceil(pg.total / limit)),
+              source: "postgres",
+            });
+            return;
+          }
+        } catch (error) {
+          console.warn(
+            "[postgres read] cron logs fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+
       const filter: Record<string, unknown> = {};
-      if (typeof req.query.runId === "string" && req.query.runId.trim()) {
-        filter.runId = req.query.runId.trim();
-      }
-      if (typeof req.query.callDate === "string" && req.query.callDate.trim()) {
-        filter.callDate = req.query.callDate.trim();
-      }
-      if (typeof req.query.level === "string" && req.query.level !== "all") {
-        filter.level = req.query.level;
-      }
+      if (runId) filter.runId = runId;
+      if (callDate) filter.callDate = callDate;
+      if (level) filter.level = level;
       if (typeof req.query.trigger === "string" && req.query.trigger !== "all") {
         filter.trigger = req.query.trigger;
       }
       if (typeof req.query.phase === "string" && req.query.phase !== "all") {
         filter.phase = req.query.phase;
       }
-      if (typeof req.query.dateFrom === "string" && req.query.dateFrom.trim()) {
+      if (dateFrom) {
         filter.callDate = {
           ...(typeof filter.callDate === "object" && filter.callDate
             ? (filter.callDate as object)
             : {}),
-          $gte: req.query.dateFrom.trim(),
+          $gte: dateFrom,
         };
       }
-      if (typeof req.query.dateTo === "string" && req.query.dateTo.trim()) {
+      if (dateTo) {
         filter.callDate = {
           ...(typeof filter.callDate === "object" && filter.callDate
             ? (filter.callDate as object)
             : {}),
-          $lte: req.query.dateTo.trim(),
+          $lte: dateTo,
         };
       }
 
@@ -189,6 +299,7 @@ export function createFreshcallerSyncRouter(): Router {
         page,
         limit,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+        source: "mongo",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -201,6 +312,28 @@ export function createFreshcallerSyncRouter(): Router {
       const page = Math.max(1, Number(req.query.page ?? 1) || 1);
       const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 10) || 10));
       const skip = (page - 1) * limit;
+
+      if (postgresReadsEnabled()) {
+        try {
+          const pg = await pgListCronRuns({ skip, limit });
+          if (pg.total > 0) {
+            res.json({
+              runs: pg.items,
+              total: pg.total,
+              page,
+              limit,
+              totalPages: Math.max(1, Math.ceil(pg.total / limit)),
+              source: "postgres",
+            });
+            return;
+          }
+        } catch (error) {
+          console.warn(
+            "[postgres read] cron runs fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
 
       const pipeline = [
         { $sort: { createdAt: -1 as const } },
@@ -259,6 +392,7 @@ export function createFreshcallerSyncRouter(): Router {
         page,
         limit,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+        source: "mongo",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -269,6 +403,28 @@ export function createFreshcallerSyncRouter(): Router {
   router.get("/logs/runs/:runId", async (req, res) => {
     try {
       const runId = String(req.params.runId);
+      if (postgresReadsEnabled()) {
+        try {
+          const docs = await pgCronLogsForRun(runId);
+          if (docs.length > 0) {
+            res.json({
+              runId,
+              logs: docs.map((d) => ({
+                ...d,
+                createdAt: d.createdAt?.toISOString?.() ?? d.createdAt,
+              })),
+              source: "postgres",
+            });
+            return;
+          }
+        } catch (error) {
+          console.warn(
+            "[postgres read] cron run detail fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+
       const docs = await cronJobLogsCollection()
         .find({ runId })
         .sort({ createdAt: 1 })
@@ -279,6 +435,7 @@ export function createFreshcallerSyncRouter(): Router {
           ...d,
           createdAt: d.createdAt?.toISOString?.() ?? d.createdAt,
         })),
+        source: "mongo",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

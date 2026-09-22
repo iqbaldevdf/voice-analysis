@@ -5,7 +5,8 @@
 ```mermaid
 flowchart LR
   FC[Freshcaller API] --> BE[Backend Node :5050]
-  BE --> M[(MongoDB :27017)]
+  BE --> M[(MongoDB :27017 / Atlas)]
+  BE --> PG[(PostgreSQL :5432 local — F12)]
   BE --> AI[AI Service Python :8001]
   AI --> AAI[AssemblyAI]
   BE --> FE[Frontend React :5173]
@@ -19,7 +20,8 @@ flowchart LR
 | **frontend** | React, Vite | 5173 | UI: recordings, agents, sync, logs |
 | **backend** | Express, TypeScript | 5050 | API, Freshcaller sync, analysis orchestration |
 | **ai-service** | FastAPI, Python | 8001 | Audio analyze: STT, sentiment, extraction, scoring |
-| **mongo** | Docker mongo:7 | 27017 | Database `voice_analysis` |
+| **mongo** | Docker mongo:7 / Atlas | 27017 | **Current** source of truth DB `voice_analysis` |
+| **postgres** | Docker postgres:16 (F12) | 5432 | Target DB (schema + health); cutover later |
 
 ## Key backend modules
 
@@ -27,6 +29,7 @@ flowchart LR
 | --- | --- |
 | `backend/src/freshcaller/` | Client, daily sync pipeline, cron |
 | `backend/src/db/` | Mongo connection, agents, listings |
+| `backend/src/db/postgres/` | TypeORM DataSource, entities, migrations (F12) |
 | `backend/src/routes/` | REST: recordings, agents, sync |
 | `backend/src/scoring/` | Quarter windows, call quality, performance fill |
 | `backend/src/services/analyzeRecording.ts` | Download → normalize → AI → persist |

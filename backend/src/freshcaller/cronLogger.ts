@@ -5,6 +5,7 @@ import {
   type CronLogLevel,
   type CronLogPhase,
 } from "../db/syncCollections.js";
+import { dualWriteCronLog } from "../db/postgres/dualWrite.js";
 
 export type CronRunContext = {
   runId: string;
@@ -36,6 +37,7 @@ export async function appendCronLog(
     createdAt: new Date(),
   };
   await cronJobLogsCollection().insertOne(doc);
+  await dualWriteCronLog(doc);
   const prefix = `[cron:${ctx.callDate}/${ctx.runId.slice(0, 8)}]`;
   const line = `${prefix} [${level}] ${phase}: ${message}`;
   if (level === "error") console.error(line, meta ?? "");

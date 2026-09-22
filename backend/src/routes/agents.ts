@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { agentsCollection, backfillAgentsFromRecordings } from "../db/agents.js";
+import { agentsCollection, backfillAgentsFromRecordings, type AgentDocument } from "../db/agents.js";
 import { recordingsCollection, type RecordingDocument } from "../db/mongo.js";
 import {
   agentPerformance,
@@ -22,6 +22,13 @@ import {
   isForwardedMailCall,
   VOICEMAIL_MAX_DURATION_SEC,
 } from "../voicemail.js";
+import {
+  pgFindAgent,
+  pgListAgents,
+  pgRecordingsForAgent,
+  pgRecordingsForAgents,
+  postgresReadsEnabled,
+} from "../db/postgres/reads.js";
 
 const SORTABLE = new Set(["createdTime", "durationSec", "analysisStatus", "callId"]);
 
@@ -54,6 +61,37 @@ function scoreNoteFor(agentPerf: { overallScore?: number | null; note?: string |
   return null;
 }
 
+type BotHandlingValue = NonNullable<RecordingDocument["botHandling"]>;
+
+/** Script-inferred bot_segment from analyze (F09 Phase 3) — does not rewrite sync fields. */
+function analysisBotHandling(result: unknown): BotHandlingValue | null {
+  const segment = (
+    result as
+      | {
+          bot_segment?: { handling?: string; involved?: boolean } | null;
+        }
+      | null
+      | undefined
+  )?.bot_segment;
+  if (!segment) return null;
+  if (segment.handling === "bot_only" || segment.handling === "bot_transferred") {
+    return segment.handling;
+  }
+  if (segment.involved) return "bot_transferred";
+  return null;
+}
+
+/**
+ * Prefer Freshcaller sync `botHandling`; when `none`, fall back to analysis `bot_segment`
+ * so agent table Bot column matches call-details badges (F09 AC4c + Phase 3).
+ */
+function effectiveBotHandling(doc: AgentRecordingDoc): BotHandlingValue {
+  const sync = doc.botHandling ?? "none";
+  if (sync === "bot_only" || sync === "bot_transferred") return sync;
+  if (doc.analysisStatus !== "completed") return "none";
+  return analysisBotHandling(doc.analysisResult) ?? "none";
+}
+
 function toAgentRow(doc: AgentRecordingDoc) {
   const customer = doc.participants?.find((p) => p.role.toLowerCase() === "customer");
   const agentPerf = agentPerformance(doc.analysisResult);
@@ -62,6 +100,7 @@ function toAgentRow(doc: AgentRecordingDoc) {
   const categoryScores = agentPerf?.scores
     ? Object.fromEntries(Object.entries(agentPerf.scores).map(([key, value]) => [key, value?.score ?? null]))
     : null;
+  const botHandling = effectiveBotHandling(doc);
   return {
     callId: doc.callId,
     recordingId: doc.recordingId,
@@ -88,8 +127,8 @@ function toAgentRow(doc: AgentRecordingDoc) {
     scoreNote: scoreNoteFor(agentPerf),
     introductionScore: intro?.score ?? null,
     introductionRank: intro?.rank ?? null,
-    botHandling: doc.botHandling ?? "none",
-    isBotInvolved: doc.botHandling != null && doc.botHandling !== "none",
+    botHandling,
+    isBotInvolved: botHandling !== "none",
     audioClarityFlag: audioClarityFlagFromResult(
       doc.analysisStatus === "completed" ? doc.analysisResult : null,
     ),
@@ -181,37 +220,72 @@ export function createAgentsRouter(): Router {
       const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 20) || 20));
       const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
       const quarter = parseQuarter(typeof req.query.quarter === "string" ? req.query.quarter : undefined);
-      const filter = q ? { name: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } } : {};
-      const collection = agentsCollection();
-      const [total, docs] = await Promise.all([
-        collection.countDocuments(filter),
-        collection
-          .find(filter)
-          .sort({ lastCallAt: -1, name: 1 })
-          .skip((page - 1) * limit)
-          .limit(limit)
-          .toArray(),
-      ]);
+      const skip = (page - 1) * limit;
+
+      let total = 0;
+      let docs: AgentDocument[] = [];
+      let source: "postgres" | "mongo" = "mongo";
+
+      if (postgresReadsEnabled()) {
+        try {
+          const pg = await pgListAgents({ q: q || undefined, skip, limit });
+          // Prefer PG whenever the agents table has been populated (even if this page is empty).
+          const probe = await pgListAgents({ skip: 0, limit: 1 });
+          if (probe.total > 0) {
+            total = pg.total;
+            docs = pg.docs;
+            source = "postgres";
+          }
+        } catch (error) {
+          console.warn(
+            "[postgres read] agents list fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+
+      if (source === "mongo") {
+        const filter = q ? { name: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } } : {};
+        const collection = agentsCollection();
+        const [mongoTotal, mongoDocs] = await Promise.all([
+          collection.countDocuments(filter),
+          collection
+            .find(filter)
+            .sort({ lastCallAt: -1, name: 1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray(),
+        ]);
+        total = mongoTotal;
+        docs = mongoDocs;
+      }
 
       const agentIds = docs.map((doc) => doc.agentId);
       const recordingsByAgent = new Map<string, AgentRecordingDoc[]>();
       if (agentIds.length > 0) {
-        const recordings = (await recordingsCollection()
-          .find({ agentId: { $in: agentIds } })
-          .project({
-            agentId: 1,
-            callId: 1,
-            callDate: 1,
-            createdTime: 1,
-            analysisStatus: 1,
-            analysisResult: 1,
-            disposition: 1,
-            isConnected: 1,
-            isVoicemail: 1,
-            botHandling: 1,
-            callNotes: 1,
-          })
-          .toArray()) as Array<AgentRecordingDoc & { agentId?: string }>;
+        let recordings: Array<AgentRecordingDoc & { agentId?: string | null }> = [];
+        if (source === "postgres") {
+          recordings = (await pgRecordingsForAgents(agentIds)) as Array<
+            AgentRecordingDoc & { agentId?: string | null }
+          >;
+        } else {
+          recordings = (await recordingsCollection()
+            .find({ agentId: { $in: agentIds } })
+            .project({
+              agentId: 1,
+              callId: 1,
+              callDate: 1,
+              createdTime: 1,
+              analysisStatus: 1,
+              analysisResult: 1,
+              disposition: 1,
+              isConnected: 1,
+              isVoicemail: 1,
+              botHandling: 1,
+              callNotes: 1,
+            })
+            .toArray()) as Array<AgentRecordingDoc & { agentId?: string }>;
+        }
 
         for (const recording of recordings) {
           if (!recording.agentId) continue;
@@ -246,6 +320,7 @@ export function createAgentsRouter(): Router {
         page,
         limit,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+        source,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -266,7 +341,24 @@ export function createAgentsRouter(): Router {
   router.get("/:agentId", async (req, res) => {
     try {
       const agentId = decodeURIComponent(req.params.agentId);
-      const agent = await agentsCollection().findOne({ agentId });
+      let agent: AgentDocument | null = null;
+      let source: "postgres" | "mongo" = "mongo";
+
+      if (postgresReadsEnabled()) {
+        try {
+          agent = await pgFindAgent(agentId);
+          if (agent) source = "postgres";
+        } catch (error) {
+          console.warn(
+            "[postgres read] agent detail fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+      if (!agent) {
+        agent = await agentsCollection().findOne({ agentId });
+        source = "mongo";
+      }
       if (!agent) {
         res.status(404).json({ error: "Agent not found" });
         return;
@@ -293,27 +385,56 @@ export function createAgentsRouter(): Router {
       const page = Math.max(1, Number(req.query.page ?? 1) || 1);
       const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 10) || 10));
 
-      const docs = (await recordingsCollection()
-        .find({ agentId })
-        .project({
-          callId: 1,
-          recordingId: 1,
-          createdTime: 1,
-          callDate: 1,
-          durationSec: 1,
-          direction: 1,
-          phoneNumber: 1,
-          callNotes: 1,
-          analysisStatus: 1,
-          agentName: 1,
-          participants: 1,
-          analysisResult: 1,
-          isConnected: 1,
-          isVoicemail: 1,
-          botHandling: 1,
-          disposition: 1,
-        })
-        .toArray()) as AgentRecordingDoc[];
+      let docs: AgentRecordingDoc[] = [];
+      if (source === "postgres") {
+        docs = (await pgRecordingsForAgent(agentId)) as AgentRecordingDoc[];
+        if (docs.length === 0) {
+          // Agent exists in PG but recordings not backfilled — fall back to Mongo recordings.
+          docs = (await recordingsCollection()
+            .find({ agentId })
+            .project({
+              callId: 1,
+              recordingId: 1,
+              createdTime: 1,
+              callDate: 1,
+              durationSec: 1,
+              direction: 1,
+              phoneNumber: 1,
+              callNotes: 1,
+              analysisStatus: 1,
+              agentName: 1,
+              participants: 1,
+              analysisResult: 1,
+              isConnected: 1,
+              isVoicemail: 1,
+              botHandling: 1,
+              disposition: 1,
+            })
+            .toArray()) as AgentRecordingDoc[];
+        }
+      } else {
+        docs = (await recordingsCollection()
+          .find({ agentId })
+          .project({
+            callId: 1,
+            recordingId: 1,
+            createdTime: 1,
+            callDate: 1,
+            durationSec: 1,
+            direction: 1,
+            phoneNumber: 1,
+            callNotes: 1,
+            analysisStatus: 1,
+            agentName: 1,
+            participants: 1,
+            analysisResult: 1,
+            isConnected: 1,
+            isVoicemail: 1,
+            botHandling: 1,
+            disposition: 1,
+          })
+          .toArray()) as AgentRecordingDoc[];
+      }
 
       await fillMissingPerformanceScores(docs);
       await fillMissingIntroductionScripts(docs);
@@ -400,6 +521,7 @@ export function createAgentsRouter(): Router {
         totalPages: Math.max(1, Math.ceil(total / limit)),
         excludeVoicemail,
         voicemailMaxSec: VOICEMAIL_MAX_DURATION_SEC,
+        source,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

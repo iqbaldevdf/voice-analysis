@@ -16,6 +16,13 @@ import {
   isLikelyVoicemail,
   VOICEMAIL_MAX_DURATION_SEC,
 } from "../voicemail.js";
+import {
+  pgCountListings,
+  pgFindRecording,
+  pgListListings,
+  pgListRecordings,
+  postgresReadsEnabled,
+} from "../db/postgres/reads.js";
 
 export type RecordingListItem = {
   callId: number;
@@ -105,6 +112,17 @@ function toDetail(doc: RecordingDocument, includeAnalysis = true) {
 }
 
 async function findByCallId(callId: number, recordingId?: number): Promise<RecordingDocument | null> {
+  if (postgresReadsEnabled()) {
+    try {
+      const fromPg = await pgFindRecording(callId, recordingId);
+      if (fromPg) return fromPg;
+    } catch (error) {
+      console.warn(
+        `[postgres read] find recording ${callId}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
   const collection = recordingsCollection();
   if (recordingId != null && Number.isFinite(recordingId)) {
     return collection.findOne({ callId, recordingId });
@@ -197,6 +215,9 @@ function parseListQuery(req: {
     limit,
     skip,
     excludeVoicemail,
+    status: status ?? null,
+    hasAudio: typeof hasAudio === "string" ? hasAudio : null,
+    q: q || null,
     dateFrom: dateFrom || null,
     dateTo: dateTo || null,
     minDuration: minDuration ?? null,
@@ -238,6 +259,56 @@ export function createDbRecordingsRouter(): Router {
   router.get("/", async (req, res) => {
     try {
       const parsed = parseListQuery(req);
+
+      if (postgresReadsEnabled()) {
+        try {
+          const pgTotalAll = await pgCountListings();
+          if (pgTotalAll > 0) {
+            const { total, docs } = await pgListRecordings({
+              status: parsed.status ?? undefined,
+              hasAudio: parsed.hasAudio ?? undefined,
+              q: parsed.q ?? undefined,
+              dateFrom: parsed.dateFrom ?? undefined,
+              dateTo: parsed.dateTo ?? undefined,
+              minDuration: parsed.minDuration,
+              maxDuration: parsed.maxDuration,
+              excludeVoicemail: parsed.excludeVoicemail,
+              sortBy: parsed.sortBy,
+              sortDir: parsed.sortDir,
+              skip: parsed.skip,
+              limit: parsed.limit,
+            });
+            const recordings = docs.map((doc) => toListItem(doc));
+            const totalPages = Math.max(1, Math.ceil(total / parsed.limit));
+            res.json({
+              recordings,
+              total,
+              limit: parsed.limit,
+              skip: parsed.skip,
+              page: parsed.page,
+              totalPages,
+              sortBy: parsed.sortBy,
+              sortDir: parsed.sortDir === 1 ? "asc" : "desc",
+              excludeVoicemail: parsed.excludeVoicemail,
+              voicemailMaxSec: VOICEMAIL_MAX_DURATION_SEC,
+              source: "postgres",
+              filters: {
+                dateFrom: parsed.dateFrom,
+                dateTo: parsed.dateTo,
+                minDuration: parsed.minDuration,
+                maxDuration: parsed.maxDuration,
+              },
+            });
+            return;
+          }
+        } catch (error) {
+          console.warn(
+            "[postgres read] recordings list fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+
       const filter = adaptFilterForRecordings(parsed.filter);
       const collection = recordingsCollection();
       const [total, docs] = await Promise.all([
@@ -265,6 +336,7 @@ export function createDbRecordingsRouter(): Router {
         sortDir: parsed.sortDir === 1 ? "asc" : "desc",
         excludeVoicemail: parsed.excludeVoicemail,
         voicemailMaxSec: VOICEMAIL_MAX_DURATION_SEC,
+        source: "mongo",
         filters: {
           dateFrom: parsed.dateFrom,
           dateTo: parsed.dateTo,
@@ -285,6 +357,58 @@ export function createDbRecordingsRouter(): Router {
   router.get("/listings", async (req, res) => {
     try {
       const parsed = parseListQuery(req);
+
+      if (postgresReadsEnabled()) {
+        try {
+          const pgTotalAll = await pgCountListings();
+          if (pgTotalAll > 0) {
+            const { total, docs } = await pgListListings({
+              status: parsed.status ?? undefined,
+              hasAudio: parsed.hasAudio ?? undefined,
+              q: parsed.q ?? undefined,
+              dateFrom: parsed.dateFrom ?? undefined,
+              dateTo: parsed.dateTo ?? undefined,
+              minDuration: parsed.minDuration,
+              maxDuration: parsed.maxDuration,
+              excludeVoicemail: parsed.excludeVoicemail,
+              sortBy: parsed.sortBy,
+              sortDir: parsed.sortDir,
+              skip: parsed.skip,
+              limit: parsed.limit,
+            });
+            const totalPages = Math.max(1, Math.ceil(total / parsed.limit));
+            res.json({
+              recordings: docs.map((doc) => ({
+                ...doc,
+                answered: isAnsweredCall(doc),
+              })),
+              total,
+              limit: parsed.limit,
+              skip: parsed.skip,
+              page: parsed.page,
+              totalPages,
+              sortBy: parsed.sortBy,
+              sortDir: parsed.sortDir === 1 ? "asc" : "desc",
+              excludeVoicemail: parsed.excludeVoicemail,
+              voicemailMaxSec: VOICEMAIL_MAX_DURATION_SEC,
+              source: "postgres",
+              filters: {
+                dateFrom: parsed.dateFrom,
+                dateTo: parsed.dateTo,
+                minDuration: parsed.minDuration,
+                maxDuration: parsed.maxDuration,
+              },
+            });
+            return;
+          }
+        } catch (error) {
+          console.warn(
+            "[postgres read] listings fallback to mongo:",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+
       const collection = recordingListingsCollection();
       let total = await collection.countDocuments(parsed.filter);
 
@@ -320,7 +444,13 @@ export function createDbRecordingsRouter(): Router {
       res.json({
         recordings: docs.map((doc) => ({
           ...doc,
-          answered: isAnsweredCall(doc),
+          answered: isAnsweredCall(doc as {
+            isConnected?: boolean | null;
+            isVoicemail?: boolean | null;
+            callNotes?: string | null;
+            durationSec?: number | null;
+            botHandling?: string | null;
+          }),
         })),
         total,
         limit: parsed.limit,
@@ -331,6 +461,7 @@ export function createDbRecordingsRouter(): Router {
         sortDir: parsed.sortDir === 1 ? "asc" : "desc",
         excludeVoicemail: parsed.excludeVoicemail,
         voicemailMaxSec: VOICEMAIL_MAX_DURATION_SEC,
+        source: "mongo",
         filters: {
           dateFrom: parsed.dateFrom,
           dateTo: parsed.dateTo,

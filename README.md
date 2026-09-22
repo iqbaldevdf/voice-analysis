@@ -42,14 +42,20 @@ Set in `backend/.env`:
 - `FRESHCALLER_BASE_URL` (e.g. `https://datafortunecallcenter.freshcaller.com`)
 - `FRESHCALLER_API_AUTH`
 - `MONGODB_URI=mongodb://127.0.0.1:27017/voice_analysis`
+- `DATABASE_URL=postgres://voiceiq:voiceiq@127.0.0.1:5432/voice_analysis` (F12 local Postgres; optional until cutover)
 
-### MongoDB (Docker)
+### Databases (Docker)
 
 ```bash
 docker compose up -d
 ```
 
-Starts MongoDB on port `27017` (database `voice_analysis`).
+Starts **MongoDB** on `27017` and **PostgreSQL 16** on `5432` (DB `voice_analysis`). Mongo remains the live app store; Postgres schema is applied via TypeORM when `DATABASE_URL` is set (see F12).
+
+```bash
+cd backend && npm run check:postgres
+cd backend && npm run migration:run
+```
 
 Python venv (short path recommended on Windows):
 

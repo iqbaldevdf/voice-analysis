@@ -1,4 +1,5 @@
 import { recordingsCollection } from "../db/mongo.js";
+import { dualWriteRecordingAnalysisPatch } from "../db/postgres/dualWrite.js";
 import { introductionScriptFromResult } from "./agentQuarter.js";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://127.0.0.1:8001";
@@ -77,6 +78,11 @@ export async function fillMissingIntroductionScripts(
         { $set: { analysisResult: nextResult, updatedAt: new Date() } },
       );
       doc.analysisResult = nextResult;
+      await dualWriteRecordingAnalysisPatch({
+        callId: doc.callId,
+        recordingId: doc.recordingId,
+        analysisResult: nextResult,
+      });
     } catch {
       // AI service unavailable — leave stored analysis unchanged.
     }

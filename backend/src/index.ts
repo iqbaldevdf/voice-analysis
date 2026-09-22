@@ -1,9 +1,10 @@
+import "dotenv/config";
+import "reflect-metadata";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import { JobStore, type AnalysisJob, type CallMeta } from "./jobStore.js";
@@ -13,13 +14,18 @@ import { exportStore } from "./freshcaller/exportStore.js";
 import { runExportSync } from "./freshcaller/syncWorker.js";
 import type { FreshcallerCall } from "./freshcaller/types.js";
 import { connectMongo, getMongoUri, pingMongo } from "./db/mongo.js";
+import {
+  connectPostgres,
+  getDatabaseUrlForLog,
+  isPostgresConfigured,
+  pingPostgres,
+} from "./db/postgres/index.js";
+import { postgresReadsEnabled } from "./db/postgres/reads.js";
 import { s3StatusForHealth } from "./storage/audioStore.js";
 import { createDbRecordingsRouter } from "./routes/dbRecordings.js";
 import { createFreshcallerSyncRouter } from "./routes/freshcallerSync.js";
 import { createAgentsRouter } from "./routes/agents.js";
 import { startFreshcallerCron } from "./freshcaller/cron.js";
-
-dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -247,6 +253,8 @@ async function createAndStartJob(
 
 app.get("/health", async (_req, res) => {
   const mongoOk = await pingMongo();
+  const postgresConfigured = isPostgresConfigured();
+  const postgresOk = postgresConfigured ? await pingPostgres() : false;
   res.json({
     ok: true,
     recordingsDir: RECORDINGS_DIR,
@@ -262,6 +270,12 @@ app.get("/health", async (_req, res) => {
       configured: true,
       uri: getMongoUri().replace(/\/\/.*@/, "//***@"),
       connected: mongoOk,
+    },
+    postgres: {
+      configured: postgresConfigured,
+      uri: getDatabaseUrlForLog(),
+      connected: postgresOk,
+      readsEnabled: postgresConfigured ? postgresReadsEnabled() : false,
     },
     s3: s3StatusForHealth(),
   });
@@ -502,6 +516,21 @@ try {
   console.error(`MongoDB connection failed: ${message}`);
   console.error("Start Mongo with: docker compose up -d");
   process.exit(1);
+}
+
+if (isPostgresConfigured()) {
+  try {
+    await connectPostgres();
+    console.log(`PostgreSQL connected: ${getDatabaseUrlForLog()}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`PostgreSQL connection failed: ${message}`);
+    console.error("Start Postgres with: docker compose up -d postgres");
+    console.error("Or unset DATABASE_URL to boot Mongo-only (Atlas / local Mongo).");
+    process.exit(1);
+  }
+} else {
+  console.log("PostgreSQL skipped (DATABASE_URL not set) — Mongo remains source of truth (F12).");
 }
 
 app.listen(PORT, () => {

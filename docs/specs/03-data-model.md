@@ -1,12 +1,14 @@
 # Data model
 
-Database: **`voice_analysis`** (MongoDB).
+Database (current): **`voice_analysis`** on **MongoDB** (local Docker or Atlas).
 
-## Collections
+Target (F12): same logical model on **PostgreSQL** via TypeORM. Until cutover, Mongo remains the live source of truth; Postgres schema is migrated and connected for local development when `DATABASE_URL` is set.
+
+## Collections / tables
 
 ### `recordings` (canonical)
 
-One document per Freshcaller call + recording pair.
+One document/row per Freshcaller call + recording pair.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -87,3 +89,8 @@ See F02 and [Call-and-Agent-Performance.md](../Call-and-Agent-Performance.md) fo
 
 - Full backup: `mongodump` + `backend/data/fc-recordings/` (see `backups/` folder pattern).
 - Reset: drop DB + clear data dirs; re-sync from Freshcaller.
+- Postgres (F12 local): `pg_dump` / `docker compose` volume `postgres_data`; migrations via `npm run migration:run` in `backend/`.
+
+## Postgres (F12)
+
+See [F12-postgres-migration.md](./features/F12-postgres-migration.md). Tables: `recordings`, `recording_listings`, `agents`, `export_jobs`, `cron_job_logs`. Large analysis payloads live in `analysis_result JSONB`.

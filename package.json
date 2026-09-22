@@ -1,4 +1,4 @@
-{
+ {
   "name": "voice-analysis",
   "private": true,
   "version": "1.0.0",
@@ -6,6 +6,7 @@
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:ai": "C:\\va-ai\\Scripts\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --app-dir ai-service",
-    "install:all": "npm --prefix backend install && npm --prefix frontend install"
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "smoke": "npm --prefix backend run smoke"
   }
 }

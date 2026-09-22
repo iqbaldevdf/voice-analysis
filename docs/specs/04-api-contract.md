@@ -6,7 +6,7 @@ Base URL: `http://127.0.0.1:5050` (backend).
 
 | Method | Path | Response |
 | --- | --- | --- |
-| GET | `/health` | `{ ok, mongo, aiServiceUrl, freshcallerConfigured }` |
+| GET | `/health` | `{ ok, mongo, postgres?, aiServiceUrl, freshcallerConfigured }` — `postgres` present when `DATABASE_URL` is set (F12) |
 
 ## Recordings (Mongo)
 
